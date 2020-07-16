@@ -260,6 +260,21 @@ public class DevMojo extends StartDebugMojoSupport {
         }
 
         @Override
+        public boolean customPropsCheck() {
+            debug("varMavenProps in customPropsCheck: " + varMavenProps.toString());
+            debug("defaultVarMavenProps in customPropsCheck: " + defaultVarMavenProps.toString());
+
+            // Dev mode injects one property into the project as a 'liberty.var' property, which is popluated in varMavenProps.
+            // Therefore, when checking for custom properties created by the user, we assume dev mode has already populated varMavenProps with one property.
+            // If there is more than one property in varMavenProps, or any properties in defaultVarMavenProps, the user must have created at least one custom property.
+            // If dev mode injects new properties into the project in the future, this code will need to change.
+            if (!defaultVarMavenProps.isEmpty() || varMavenProps.size() > 1) {
+                return true;
+            }
+            return false;
+        }
+
+        @Override
         public void libertyCreate() throws PluginExecutionException {
             try {
                 if (isUsingBoost()) {
