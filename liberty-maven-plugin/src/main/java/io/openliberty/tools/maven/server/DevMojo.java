@@ -741,15 +741,13 @@ public class DevMojo extends StartDebugMojoSupport {
 
         processContainerParams();
 
-        if (!container) {
-            if (serverDirectory.exists()) {
-                if (ServerStatusUtil.isServerRunning(installDirectory, super.outputDirectory, serverName)) {
-                    throw new MojoExecutionException("The server " + serverName
-                            + " is already running. Terminate all instances of the server before starting dev mode."
-                            + " You can stop a server instance with the command 'mvn liberty:stop'.");
-                }
+        if (serverDirectory.exists()) {
+            if (ServerStatusUtil.isServerRunning(installDirectory, super.outputDirectory, serverName)) {
+                throw new MojoExecutionException("The server " + serverName
+                        + " is already running locally. Terminate all instances of the server before starting dev mode (regular or container mode)."
+                        + " You can stop a server instance with the command 'mvn liberty:stop'.");
             }
-        } // else TODO check if the container is already running?
+        }
 
         // create an executor for tests with an additional queue of size 1, so
         // any further changes detected mid-test will be in the following run
