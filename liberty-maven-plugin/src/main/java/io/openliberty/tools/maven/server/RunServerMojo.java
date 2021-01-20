@@ -50,11 +50,18 @@ public class RunServerMojo extends PluginConfigSupport {
         runMojo("org.apache.maven.plugins", "maven-resources-plugin", "resources");
         
         if(!looseApplication) {
-            runMojo("org.apache.maven.plugins", "maven-war-plugin", "war");
+            switch (project.getPackaging()) {
+                case "war":
+                    runMojo("org.apache.maven.plugins", "maven-war-plugin", "war");
+                    break;
+                case "ear":
+                    runMojo("org.apache.maven.plugins", "maven-ear-plugin", "ear");
+                    break;
+            }
         }
         
         runLibertyMojoCreate();
-        runLibertyMojoInstallFeature(null);
+        runLibertyMojoInstallFeature(null, null);
         runLibertyMojoDeploy(false);
 
         ServerTask serverTask = initializeJava();
