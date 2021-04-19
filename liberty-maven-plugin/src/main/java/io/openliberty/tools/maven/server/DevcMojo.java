@@ -22,7 +22,9 @@ import org.apache.maven.plugins.annotations.Parameter;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /* graphBuilder */
@@ -58,12 +60,17 @@ import org.apache.maven.shared.dependency.graph.filter.ArtifactDependencyNodeFil
 /* Aether */
 
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.DependencyManagement;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.artifact.Artifact;
 import org.eclipse.aether.collection.CollectRequest;
 import org.eclipse.aether.resolution.DependencyRequest;
 import org.eclipse.aether.resolution.DependencyResolutionException;
 import org.eclipse.aether.resolution.DependencyResult;
+
+import org.apache.maven.shared.dependency.analyzer.DefaultProjectDependencyAnalyzer;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
 
 /**
  * Start dev mode for containers
@@ -92,6 +99,9 @@ public class DevcMojo extends DevMojo {
     @Parameter(property = "test", defaultValue = "false")
     private boolean test;
 
+    @Parameter(property = "analyze", defaultValue = "false")
+    private boolean analyze;
+
     @Parameter(property = "includes")
     private String includes;
 
@@ -105,6 +115,8 @@ public class DevcMojo extends DevMojo {
     protected void doExecute() throws Exception {
         if (test) {
             testMavenStuff();
+        } else if (analyze) {
+            testAnalyze();
         } else if (aether) {
             if (filter) {
                 doAetherFilterMethod();
@@ -232,20 +244,111 @@ public class DevcMojo extends DevMojo {
 
     private void testMavenStuff() throws MojoExecutionException, DependencyResolutionException {
         List<Dependency> dependencies = project.getDependencies();
-        log.debug("Dependencies");
+        log.debug("<<< Dependencies >>>");
         for (Dependency d : dependencies) {
             log.debug(d.getArtifactId());
         }
+
+        /*
         Set<Artifact> artifacts = project.getArtifacts();
-        log.debug("Artifacts");
+        log.debug("<<< Artifacts >>>");
         for (Artifact a : artifacts) {
+            log.debug(a.getArtifactId());
+        }
+
+        Map<String, Artifact> artifactMap = project.getArtifactMap();
+        Set<String> keys = artifactMap.keySet();
+        log.debug("<<< Artifact Map keys >>>");
+        for (String s : keys) {
+            log.debug(s);
+        }
+        Collection<Artifact> artifacts_2 = artifactMap.values();
+        log.debug("<<< Artifact Map artifacts >>>");
+        for (Artifact a : artifacts_2) {
+            log.debug(a.getArtifactId());
+        }
+        */
+
+        /*
+        Set<Artifact> dependencyArtifacts = project.getDependencyArtifacts();
+        log.debug("\n<<< Dependency Artifacts >>>");
+        for (Artifact a : dependencyArtifacts) {
+            log.debug(a.getArtifactId());
+        }
+
+        List<Dependency> compileDependencies = project.getCompileDependencies();
+        log.debug("\n<<< Compile Dependencies >>>");
+        for (Dependency d : compileDependencies) {
+            log.debug(d.getArtifactId());
+        }
+
+        List<Artifact> compileArtifacts = project.getCompileArtifacts();
+        log.debug("\n<<< Compile Artifacts >>>");
+        for (Artifact a : compileArtifacts) {
+            log.debug(a.getArtifactId());
+        }
+
+        List<Dependency> runtimeDependencies = project.getRuntimeDependencies();
+        log.debug("\n<<< Runtime Dependencies >>>");
+        for (Dependency d : runtimeDependencies) {
+            log.debug(d.getArtifactId());
+        }
+
+        List<Artifact> runtimeArtifacts = project.getRuntimeArtifacts();
+        log.debug("\n<<< Runtime Artifacts >>>");
+        for (Artifact a : runtimeArtifacts) {
+            log.debug(a.getArtifactId());
+        }
+        */
+
+        DependencyManagement dm = project.getDependencyManagement();
+        if (dm != null) {
+            List<Dependency> dmDependencies = dm.getDependencies();
+            log.debug("<<< DM Dependencies >>>");
+            for (Dependency d : dmDependencies) {
+                log.debug(d.getArtifactId());
+            }
+        } else {
+            log.debug("DM is null");
+        }
+        
+    }
+
+    private void testAnalyze() {
+        log.debug("<<<<<<<<<<<< testAnalyze >>>>>>>>>>>");
+        DefaultProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
+        if (analyzer == null) {
+            log.debug("analyzer is null");
+        }
+        try {
+            ProjectDependencyAnalysis analysis = analyzer.analyze(project);
+            if (analysis == null) {
+                log.debug("analysis is null");
+            }
+            Set<Artifact> usedDeclaredArtifacts = analysis.getUsedDeclaredArtifacts();
+            Set<Artifact> usedUndeclaredArtifacts = analysis.getUsedUndeclaredArtifacts();
+            Set<Artifact> unusedDeclaredArtifacts = analysis.getUnusedDeclaredArtifacts();
+            printArtifacts(usedDeclaredArtifacts, "Used & Declared");
+            printArtifacts(usedUndeclaredArtifacts, "Used & Undeclared");
+            printArtifacts(unusedDeclaredArtifacts, "Unused & Declared");
+        } catch (ProjectDependencyAnalyzerException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
+    private void printArtifacts(Set<Artifact> artifacts, String type) {
+        log.debug("<<<<< " + type + " >>>>>");
+            for (Artifact a : artifacts) {
             log.debug(a.getArtifactId());
         }
     }
 
     private void doAetherFilterMethod() throws MojoExecutionException, DependencyResolutionException {
         log.debug("<<<<<<<<<<<< doAetherFilterMethod >>>>>>>>>>>");
-        List<Dependency> dependencies = project.getDependencies();
+        DependencyManagement dm = project.getDependencyManagement();
+        // null check for dm
+        List<Dependency> dependencies = dm.getDependencies();
         List<Artifact> artifacts = new ArrayList<Artifact>();
         for (Dependency dep : dependencies) {
             Artifact artifact = getArtifact(dep.getGroupId(), dep.getArtifactId(), dep.getType(), dep.getVersion());
@@ -265,10 +368,12 @@ public class DevcMojo extends DevMojo {
             //log.debug("collectRequest:");
             //log.debug(collectRequest.toString());
             
+            // is there a way to modify the dependency request to not download dependencies?
             DependencyRequest depRequest = new DependencyRequest(collectRequest, null);
             //log.debug("depRequest:");
             //log.debug(depRequest.toString());
 
+            // is there a way to resolve dependencies without downloading them?
             DependencyResult dependencyResult = repositorySystem.resolveDependencies(repoSession, depRequest);
             //log.debug("dependencyResult:");
             //log.debug(dependencyResult.toString());
