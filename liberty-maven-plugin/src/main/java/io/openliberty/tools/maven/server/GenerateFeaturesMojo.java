@@ -15,12 +15,12 @@
  */
 package io.openliberty.tools.maven.server;
 
-import org.apache.maven.plugins.annotations.Parameter;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -28,7 +28,10 @@ import java.util.Set;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 
+import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.Mojo;
+import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.MavenProject;
 import org.eclipse.aether.collection.CollectRequest;
 import org.eclipse.aether.resolution.DependencyRequest;
@@ -47,13 +50,25 @@ import io.openliberty.tools.common.plugins.util.InstallFeatureUtil.ProductProper
 import io.openliberty.tools.maven.BasicSupport;
 import io.openliberty.tools.maven.InstallFeatureSupport;
 
+//import org.apache.maven.shared.dependency.analyzer.DefaultProjectDependencyAnalyzer;
+//import org.apache.maven.shared.dependency.analyzer.DependencyAnalyzer;
+
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
+
+import org.codehaus.plexus.PlexusContainer;
+import org.codehaus.plexus.DefaultPlexusContainer;
+import org.codehaus.plexus.PlexusConstants;
+import org.codehaus.plexus.context.Context;
+
 /**
  * This mojo generates the features required in the featureManager element in server.xml.
  * It examines the dependencies declared in the pom.xml and the features already declared
  * in the featureManager elements in the XML configuration files. Then it generates any
  * missing feature names and stores them in a new featureManager element in a new XML file.
  */
-@Mojo(name = "generate-features")
+@Mojo(name = "generate-features", requiresDependencyCollection = ResolutionScope.TEST, requiresDependencyResolution = ResolutionScope.TEST)
 public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     protected static final String PLUGIN_ADDED_FEATURES_FILE = "configDropins/overrides/liberty-plugin-added-features.xml";
@@ -65,18 +80,28 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     @Parameter(property = "includes")
     private String includes;
 
+    @Parameter(property = "analyzeDependencies", defaultValue = "false")
+    private boolean analyzeDependencies;
+
+    @Component
+    private ProjectDependencyAnalyzer analyzer;
+
+    //private Context context;
+
     /*
      * (non-Javadoc)
      * @see org.codehaus.mojo.pluginsupport.MojoSupport#doExecute()
      */
     @Override
     protected void doExecute() throws Exception {
-        if(!initialize()) {
-            return;
-        }
         if (filterDependency) {
             filterDependency(includes);
+        } else if (analyzeDependencies) {
+            dependencyAnalysis();
         } else {
+            if(!initialize()) {
+                return;
+            }
             generateFeatures();
         }
     }
@@ -198,12 +223,14 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     private void filterDependency(String includesPattern) throws DependencyResolutionException, MojoExecutionException {
         log.debug("<<<<<<<<<<<< Finding Dependency Paths >>>>>>>>>>>");
         DependencyManagement dm = project.getDependencyManagement();
-        // null check for dm
-        if (dm == null) {
-            log.debug("DependencyManagement is null");
-            return;
+        List<Dependency> dependencies;
+        if (dm != null) {
+            dependencies = dm.getDependencies();
         }
-        List<Dependency> dependencies = dm.getDependencies();
+        else {
+            log.debug("DependencyManagement is null. Retrieve dependencies directly through project.");
+            dependencies = project.getDependencies();
+        }
         List<Artifact> artifacts = new ArrayList<Artifact>();
         for (Dependency dep : dependencies) {
             Artifact artifact = getArtifact(dep.getGroupId(), dep.getArtifactId(), dep.getType(), dep.getVersion());
@@ -251,5 +278,109 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             }
             log.debug("----------------------------------------------------------");
         }
+    }
+
+    private void dependencyAnalysis() {
+        log.debug("<<<<<<<<<<<< Starting New Dependency Analysis >>>>>>>>>>>");
+        try {
+            //alt analyzer creation
+            //DefaultProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
+            //ProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
+
+            ProjectDependencyAnalysis analysis;
+            analysis = createProjectDependencyAnalyzer().analyze( project );
+
+            Set<Artifact> usedDeclared = new LinkedHashSet<>( analysis.getUsedDeclaredArtifacts() );
+            Set<Artifact> usedUndeclared = new LinkedHashSet<>( analysis.getUsedUndeclaredArtifacts() );
+            Set<Artifact> unusedDeclared = new LinkedHashSet<>( analysis.getUnusedDeclaredArtifacts() );
+
+            logArtifacts(usedDeclared, "Used & Declared");
+            logArtifacts(usedUndeclared, "Used & Undeclared");
+            logArtifacts(unusedDeclared, "Unused & Declared");
+
+            Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<>( analysis.getArtifactClassMap() );
+            Set<String> dependencyClasses = new HashSet<>( analysis.getDependencyClasses() );
+
+            log.debug( "<<< ARTIFACT CLASS MAP >>>" );
+            log.debug(artifactClassMap.toString());
+            log.debug( "<<< DEPENDENCY CLASSES >>>" );
+            log.debug(dependencyClasses.toString());
+
+            Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
+            umbrellaDependencies.addAll(getUmbrellaDependencies(usedDeclared));
+            umbrellaDependencies.addAll(getUmbrellaDependencies(usedUndeclared));
+            logArtifacts(umbrellaDependencies, "Umbrella Dependencies");
+
+            Set<String> lookupClasses = getLookupClasses(artifactClassMap, dependencyClasses, umbrellaDependencies);
+            log.info( "<<< LOOKUP CLASSES >>>" );
+            log.info(lookupClasses.toString());
+
+        } catch (ProjectDependencyAnalyzerException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (MojoExecutionException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
+    private void logArtifacts(Set<Artifact> artifacts, String type) {
+        log.info("<<<<< " + type + " >>>>>");
+        log.info(type + " size: " + artifacts.size());
+        for (Artifact a : artifacts) {
+            log.info(a.toString());
+        }
+    }
+
+     /**
+     * FROM: https://github.com/apache/maven-dependency-plugin/blob/a0ac6fedf87dec9ec3ca93dd83d28ef2828cb544/src/main/java/org/apache/maven/plugins/dependency/analyze/AbstractAnalyzeMojo.java#L258
+     * @return {@link ProjectDependencyAnalyzer}
+     * @throws MojoExecutionException in case of an error.
+     */
+    protected ProjectDependencyAnalyzer createProjectDependencyAnalyzer()
+        throws MojoExecutionException
+    {
+
+        final String role = ProjectDependencyAnalyzer.ROLE;
+        final String roleHint = "default";
+
+        try
+        {
+            DefaultPlexusContainer defaultContainer = new DefaultPlexusContainer();
+            Context context = defaultContainer.getContext();
+            final PlexusContainer container = (PlexusContainer) context.get( PlexusConstants.PLEXUS_KEY );
+
+            return (ProjectDependencyAnalyzer) container.lookup( role, roleHint );
+        }
+        catch ( Exception exception )
+        {
+            throw new MojoExecutionException( "Failed to instantiate ProjectDependencyAnalyser with role " + role
+                + " / role-hint " + roleHint, exception );
+        }
+    }
+
+    private Set<Artifact> getUmbrellaDependencies(Set<Artifact> artifacts) {
+        Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
+        for (Artifact a : artifacts) {
+            if (a.getArtifactId().equals("jakarta.jakartaee-api") ||
+                a.getArtifactId().equals("javaee-api")) {
+                    umbrellaDependencies.add(a);
+                }
+        }
+        return umbrellaDependencies;
+    }
+        
+    private Set<String> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, Set<Artifact> umbrellaDependencies) {
+        Set<String> lookupClasses = new HashSet<>();
+        for (Artifact a : umbrellaDependencies) {
+            Set<String> artifactClasses = artifactClassMap.get(a);
+            for (String depClass : dependencyClasses) {
+                if (artifactClasses.contains(depClass)) {
+                    // may need to check for duplicates
+                    lookupClasses.add(depClass);
+                }
+            }
+        }
+        return lookupClasses;
     }
 }
