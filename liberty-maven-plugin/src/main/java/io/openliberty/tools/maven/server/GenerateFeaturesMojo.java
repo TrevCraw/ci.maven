@@ -368,21 +368,33 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
             Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<>( analysis.getArtifactClassMap() );
             Set<String> dependencyClasses = new HashSet<>( analysis.getDependencyClasses() );
+            Set<String> testOnlyDependencyClasses = new HashSet<>( analysis.getTestOnlyDependencyClasses() );
 
             log.debug( "<<< ARTIFACT CLASS MAP >>>" );
             log.debug(artifactClassMap.toString());
             log.debug( "<<< DEPENDENCY CLASSES >>>" );
             log.debug(dependencyClasses.toString());
+            log.debug( "<<< TEST ONLY CLASSES >>>" );
+            log.debug(testOnlyDependencyClasses.toString());
+
+            Set<Artifact> lookupDependencies = new LinkedHashSet<>();
+            lookupDependencies.addAll(usedDeclared);
+            lookupDependencies.addAll(usedUndeclared);
+            lookupDependencies = removeTestArtifacts(lookupDependencies);
 
             Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
-            umbrellaDependencies.addAll(getUmbrellaDependencies(usedDeclared));
-            umbrellaDependencies.addAll(getUmbrellaDependencies(usedUndeclared));
+            umbrellaDependencies.addAll(getUmbrellaDependencies(lookupDependencies));
             logArtifacts(umbrellaDependencies, "Umbrella Dependencies");
+            lookupDependencies.removeAll(umbrellaDependencies);
+            logArtifacts(lookupDependencies, "LOOKUP DEPENDENCIES");
 
-            Set<String> lookupClasses = getLookupClasses(artifactClassMap, dependencyClasses, umbrellaDependencies);
+            Set<String> lookupClasses = getLookupClasses(artifactClassMap, dependencyClasses, testOnlyDependencyClasses, umbrellaDependencies);
             log.info( "<<< LOOKUP CLASSES >>>" );
             log.info(lookupClasses.toString());
 
+            Set<String> lookupPackages = getLookupPackages(lookupClasses);
+            log.info( "<<< LOOKUP PACKAGES >>>" );
+            log.info(lookupPackages.toString());
         } catch (ProjectDependencyAnalyzerException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -398,6 +410,18 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         for (Artifact a : artifacts) {
             log.info(a.toString());
         }
+    }
+
+    private Set<Artifact> removeTestArtifacts(Set<Artifact> artifacts) {
+        Set<Artifact> testArtifacts = new LinkedHashSet<>();
+        for (Artifact a : artifacts) {
+            if(a.getScope().equals("test")) {
+                testArtifacts.add(a);
+            }
+        }
+        logArtifacts(testArtifacts, "Test Dependencies To Remove");
+        artifacts.removeAll(testArtifacts);
+        return artifacts;
     }
 
      /**
@@ -438,17 +462,30 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         return umbrellaDependencies;
     }
         
-    private Set<String> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, Set<Artifact> umbrellaDependencies) {
+    private Set<String> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, 
+                                         Set<String> testOnlyDependencyClasses, Set<Artifact> umbrellaDependencies) {
         Set<String> lookupClasses = new HashSet<>();
         for (Artifact a : umbrellaDependencies) {
             Set<String> artifactClasses = artifactClassMap.get(a);
             for (String depClass : dependencyClasses) {
-                if (artifactClasses.contains(depClass)) {
+                if (artifactClasses.contains(depClass) && !testOnlyDependencyClasses.contains(depClass)) {
                     // may need to check for duplicates
                     lookupClasses.add(depClass);
                 }
             }
         }
         return lookupClasses;
+    }
+
+    private Set<String> getLookupPackages(Set<String> lookupClasses) {
+        Set<String> lookupPackages = new HashSet<>();
+        for (String lookupClass : lookupClasses) {
+            String[] packageSegments = lookupClass.split("\\.");
+            String lookupPackage = lookupClass.replace("." + packageSegments[packageSegments.length - 1], "");
+            if (!lookupPackages.contains(lookupPackage)) {
+                lookupPackages.add(lookupPackage);
+            }
+        }
+        return lookupPackages;
     }
 }
