@@ -85,8 +85,20 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     @Parameter(property = "analyzeDependencies", defaultValue = "false")
     private boolean analyzeDependencies;
 
-    @Parameter(property = "buildDependencyTree", defaultValue = "false")
-    private boolean buildDependencyTree;
+    @Parameter(property = "buildPOMDependencyTrees", defaultValue = "false")
+    private boolean buildPOMDependencyTrees;
+
+    @Parameter(property = "buildUmbrellaDependencyTrees", defaultValue = "false")
+    private boolean buildUmbrellaDependencyTrees;
+
+    @Parameter(property = "findDependencyVersion", defaultValue = "false")
+    private boolean findDependencyVersion;
+
+    @Parameter(property = "packageDep")
+    private String packageDep;
+
+    @Parameter(property = "umbrellaDep")
+    private String umbrellaDep;
 
     //private Context context;
 
@@ -100,8 +112,12 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             filterDependency(includes);
         } else if (analyzeDependencies) {
             dependencyAnalysis();
-        } else if (buildDependencyTree) {
-            buildDependencyTree();
+        } else if (buildPOMDependencyTrees) {
+            buildPOMDependencyTrees();
+        } else if (buildUmbrellaDependencyTrees) {
+            buildUmbrellaDependencyTrees();
+        } else if (findDependencyVersion) {
+            findDependencyVersion(packageDep, umbrellaDep);
         } else {
             if(!initialize()) {
                 return;
@@ -224,8 +240,8 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         return null;
     }
 
-    private void buildDependencyTree() throws DependencyResolutionException, MojoExecutionException {
-        log.debug("<<<<<<<<<<<< Building Dependency Tree >>>>>>>>>>>");
+    private void buildPOMDependencyTrees() throws DependencyResolutionException, MojoExecutionException {
+        log.debug("<<<<<<<<<<<< Building POM Dependency Trees >>>>>>>>>>>");
         DependencyManagement dm = project.getDependencyManagement();
         List<Dependency> dependencies;
         if (dm != null) {
@@ -246,9 +262,46 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
             artifacts.add(getArtifact(item));
         }
+        buildDependencyTree(artifacts);
+    }
 
-        List<List<org.eclipse.aether.graph.DependencyNode>> allPaths = new ArrayList<List<org.eclipse.aether.graph.DependencyNode>>();
+    private void buildUmbrellaDependencyTrees() throws DependencyResolutionException, MojoExecutionException {
+        log.debug("<<<<<<<<<<<< Building Umbrella Dependency Trees >>>>>>>>>>>");
+        List<Artifact> artifacts = new ArrayList<Artifact>();
+        ArtifactItem item = new ArtifactItem();
 
+        //JavaEE
+        item.setGroupId("javax");
+        item.setArtifactId("javaee-api");
+        item.setType("pom");
+        String[] javaEEVersions = new String[] {"6.0", "7.0", "8.0", "8.0.1"};
+        for (String version : javaEEVersions) {
+            item.setVersion(version);
+            artifacts.add(getArtifact(item));
+        }
+        //JakartaEE
+        item.setGroupId("jakarta.platform");
+        item.setArtifactId("jakarta.jakartaee-api");
+        item.setType("pom");
+        String[] jakartaEEVersions = new String[] {"8.0.0", "9.0.0", "9.1.0"};
+        for (String version : jakartaEEVersions) {
+            item.setVersion(version);
+            artifacts.add(getArtifact(item));
+        }
+        //Microprofile
+        item.setGroupId("org.eclipse.microprofile");
+        item.setArtifactId("microprofile");
+        item.setType("pom");
+        String[] microprofileVersions = new String[] {"3.0", "3.1", "3.2", "3.3", "4.0", "4.0.1"};
+        for (String version : microprofileVersions) {
+            item.setVersion(version);
+            artifacts.add(getArtifact(item));
+        }
+
+        buildDependencyTree(artifacts);
+    }
+
+    private void buildDependencyTree(List<Artifact> artifacts) throws DependencyResolutionException, MojoExecutionException {
         for (Artifact artifact : artifacts) {
             org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
                     artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
@@ -265,6 +318,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
                 org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
                 log.info("<<<< Dependency Tree for " + rootNode.getArtifact().toString() + " >>>>");
                 printDependencyTree(rootNode, "");
+                log.info("------------------------------------------------------------------------------------------------------------------------------------");
             } catch (DependencyCollectionException e) {
                 log.error("Could not collect dependencies", e);
             }
@@ -275,6 +329,50 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         log.info(space + node.getArtifact().toString());
         for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
             printDependencyTree(child, space + " ");
+        }
+    }
+
+    private void findDependencyVersion(String packageDep, String umbrellaDep) throws MojoExecutionException {
+        String packageDepGroupId = packageDep.split(":")[0];
+        String packageDepArtifactId = packageDep.split(":")[1];
+
+        String umbrellaDepGroupId = umbrellaDep.split(":")[0];
+        String umbrellaDepArtifactId = umbrellaDep.split(":")[1];
+        String umbrellaDepVersion = umbrellaDep.split(":")[3];
+
+        ArtifactItem item = new ArtifactItem();
+        item.setGroupId(umbrellaDepGroupId);
+        item.setArtifactId(umbrellaDepArtifactId);
+        item.setType("pom");
+        item.setVersion(umbrellaDepVersion);
+        Artifact artifact = getArtifact(item);
+
+        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
+                artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
+        org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
+
+        CollectRequest collectRequest = new CollectRequest();
+        collectRequest.setRoot(dependency);
+        collectRequest.setRepositories(repositories);
+        
+        CollectResult collectResult;
+        try {
+            // builds the dependency graph without downloading actual artifact files
+            collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
+            org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
+            boolean dependencyFound = false;
+            for (org.eclipse.aether.graph.DependencyNode child : rootNode.getChildren()) {
+                if (child.getArtifact().getGroupId().equals(packageDepGroupId) &&
+                    child.getArtifact().getArtifactId().equals(packageDepArtifactId)) {
+                        log.info("Version for " + packageDep + " : " + child.getArtifact().getVersion());
+                        dependencyFound = true;
+                }
+            }
+            if (!dependencyFound) {
+                log.info("Dependency not found under this umbrella dependency.");
+            }
+        } catch (DependencyCollectionException e) {
+            log.error("Could not collect dependencies", e);
         }
     }
 
