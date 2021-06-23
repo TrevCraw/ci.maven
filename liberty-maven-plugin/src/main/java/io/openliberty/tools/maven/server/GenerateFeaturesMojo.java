@@ -242,27 +242,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     private void buildPOMDependencyTrees() throws DependencyResolutionException, MojoExecutionException {
         log.debug("<<<<<<<<<<<< Building POM Dependency Trees >>>>>>>>>>>");
-        DependencyManagement dm = project.getDependencyManagement();
-        List<Dependency> dependencies;
-        if (dm != null) {
-            dependencies = dm.getDependencies();
-        }
-        else {
-            log.debug("DependencyManagement is null. Retrieve dependencies directly through project.");
-            dependencies = project.getDependencies();
-        }
-        List<Artifact> artifacts = new ArrayList<Artifact>();
-        for (Dependency dep : dependencies) {
-            ArtifactItem item = new ArtifactItem();
-            item.setGroupId(dep.getGroupId());
-            item.setArtifactId(dep.getArtifactId());
-            // force the collection to get only the pom, not the actual artifact type
-            item.setType("pom");
-            item.setVersion(dep.getVersion());
-
-            artifacts.add(getArtifact(item));
-        }
-        buildDependencyTree(artifacts);
+        buildDependencyTree(retrieveProjectArtifacts());
     }
 
     private void buildUmbrellaDependencyTrees() throws DependencyResolutionException, MojoExecutionException {
@@ -279,6 +259,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             item.setVersion(version);
             artifacts.add(getArtifact(item));
         }
+
         //JakartaEE
         item.setGroupId("jakarta.platform");
         item.setArtifactId("jakarta.jakartaee-api");
@@ -288,6 +269,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             item.setVersion(version);
             artifacts.add(getArtifact(item));
         }
+
         //Microprofile
         item.setGroupId("org.eclipse.microprofile");
         item.setArtifactId("microprofile");
@@ -303,36 +285,28 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     private void buildDependencyTree(List<Artifact> artifacts) throws DependencyResolutionException, MojoExecutionException {
         for (Artifact artifact : artifacts) {
-            org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
-                    artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
-            org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
-
-            CollectRequest collectRequest = new CollectRequest();
-            collectRequest.setRoot(dependency);
-            collectRequest.setRepositories(repositories);
-            
-            CollectResult collectResult;
-            try {
-                // builds the dependency graph without downloading actual artifact files
-                collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
-                org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
+            org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+            if (rootNode != null) {
                 log.info("<<<< Dependency Tree for " + rootNode.getArtifact().toString() + " >>>>");
-                printDependencyTree(rootNode, "");
+                printDependencyTree(rootNode, "-");
                 log.info("------------------------------------------------------------------------------------------------------------------------------------");
-            } catch (DependencyCollectionException e) {
-                log.error("Could not collect dependencies", e);
+            }
+            else {
+                log.info("Root Node is null");
             }
         }
     }
 
-    private void printDependencyTree(org.eclipse.aether.graph.DependencyNode node, String space) {
-        log.info(space + node.getArtifact().toString());
+    private void printDependencyTree(org.eclipse.aether.graph.DependencyNode node, String dash) {
+        log.info(dash + node.getArtifact().toString());
         for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
-            printDependencyTree(child, space + " ");
+            printDependencyTree(child, dash + "-");
         }
     }
 
-    private void findDependencyVersion(String packageDep, String umbrellaDep) throws MojoExecutionException {
+    // packageDep example: org.eclipse.microprofile.health:microprofile-health-api
+    // umbrellaDep example: org.eclipse.microprofile:microprofile:pom:3.0
+    private void findDependencyVersion(String packageDep, String umbrellaDep) throws DependencyResolutionException, MojoExecutionException {
         String packageDepGroupId = packageDep.split(":")[0];
         String packageDepArtifactId = packageDep.split(":")[1];
 
@@ -347,37 +321,55 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         item.setVersion(umbrellaDepVersion);
         Artifact artifact = getArtifact(item);
 
-        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
-                artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
-        org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
-
-        CollectRequest collectRequest = new CollectRequest();
-        collectRequest.setRoot(dependency);
-        collectRequest.setRepositories(repositories);
-        
-        CollectResult collectResult;
-        try {
-            // builds the dependency graph without downloading actual artifact files
-            collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
-            org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
-            boolean dependencyFound = false;
-            for (org.eclipse.aether.graph.DependencyNode child : rootNode.getChildren()) {
-                if (child.getArtifact().getGroupId().equals(packageDepGroupId) &&
-                    child.getArtifact().getArtifactId().equals(packageDepArtifactId)) {
-                        log.info("Version for " + packageDep + " : " + child.getArtifact().getVersion());
-                        dependencyFound = true;
-                }
+        org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+        boolean dependencyFound = false;
+        for (org.eclipse.aether.graph.DependencyNode child : rootNode.getChildren()) {
+            if (child.getArtifact().getGroupId().equals(packageDepGroupId) &&
+                child.getArtifact().getArtifactId().equals(packageDepArtifactId)) {
+                    log.info("Version for " + packageDep + " : " + child.getArtifact().getVersion());
+                    dependencyFound = true;
             }
-            if (!dependencyFound) {
-                log.info("Dependency not found under this umbrella dependency.");
-            }
-        } catch (DependencyCollectionException e) {
-            log.error("Could not collect dependencies", e);
+        }
+        if (!dependencyFound) {
+            log.info("Dependency not found under this umbrella dependency.");
         }
     }
 
     private void filterDependency(String includesPattern) throws DependencyResolutionException, MojoExecutionException {
         log.debug("<<<<<<<<<<<< Finding Dependency Paths >>>>>>>>>>>");
+        List<Artifact> artifacts = retrieveProjectArtifacts();
+        List<List<org.eclipse.aether.graph.DependencyNode>> allPaths = new ArrayList<List<org.eclipse.aether.graph.DependencyNode>>();
+
+        for (Artifact artifact : artifacts) {
+            org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+            org.eclipse.aether.graph.DependencyFilter depFilter = new org.eclipse.aether.util.filter.PatternInclusionsDependencyFilter(
+                    includesPattern);
+            org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor filteringVisitor = new org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor(
+                    depFilter);
+            rootNode.accept(filteringVisitor);
+            List<List<org.eclipse.aether.graph.DependencyNode>> nodeList = filteringVisitor.getPaths();
+            if (nodeList == null || nodeList.isEmpty()) {
+                log.debug("No Paths");
+            } else {
+                for (List<org.eclipse.aether.graph.DependencyNode> pathList : nodeList) {
+                    allPaths.add(pathList);
+                    log.debug("Path added");
+                }
+            }
+        }
+
+        int i = 0;
+        for (List<org.eclipse.aether.graph.DependencyNode> pathList : allPaths) {
+            log.info("----------------------------------------------------------");
+            log.info("<<< Path " + ++i + " >>>");
+            for (org.eclipse.aether.graph.DependencyNode node : pathList) {
+                log.info(node.getArtifact().toString());
+            }
+            log.info("----------------------------------------------------------");
+        }
+    }
+
+    private List<Artifact> retrieveProjectArtifacts() throws MojoExecutionException {
         DependencyManagement dm = project.getDependencyManagement();
         List<Dependency> dependencies;
         if (dm != null) {
@@ -395,54 +387,29 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             // force the collection to get only the pom, not the actual artifact type
             item.setType("pom");
             item.setVersion(dep.getVersion());
-
             artifacts.add(getArtifact(item));
         }
+        return artifacts;
+    }
 
-        List<List<org.eclipse.aether.graph.DependencyNode>> allPaths = new ArrayList<List<org.eclipse.aether.graph.DependencyNode>>();
+    private org.eclipse.aether.graph.DependencyNode retrieveRootNode(Artifact artifact) throws DependencyResolutionException, MojoExecutionException {
+        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
+                artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
+        org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
 
-        for (Artifact artifact : artifacts) {
-            org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
-                    artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
-            org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
-
-            CollectRequest collectRequest = new CollectRequest();
-            collectRequest.setRoot(dependency);
-            collectRequest.setRepositories(repositories);
-            
-            CollectResult collectResult;
-            try {
-                // builds the dependency graph without downloading actual artifact files
-                collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
-
-                org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
-                org.eclipse.aether.graph.DependencyFilter depFilter = new org.eclipse.aether.util.filter.PatternInclusionsDependencyFilter(
-                        includesPattern);
-                org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor filteringVisitor = new org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor(
-                        depFilter);
-                rootNode.accept(filteringVisitor);
-                List<List<org.eclipse.aether.graph.DependencyNode>> nodeList = filteringVisitor.getPaths();
-                if (nodeList == null || nodeList.isEmpty()) {
-                    log.debug("No Paths");
-                } else {
-                    for (List<org.eclipse.aether.graph.DependencyNode> pathList : nodeList) {
-                        allPaths.add(pathList);
-                        log.debug("Path added");
-                    }
-                }
-            } catch (DependencyCollectionException e) {
-                log.error("Could not collect dependencies", e);
-            }
-        }
-
-        int i = 0;
-        for (List<org.eclipse.aether.graph.DependencyNode> pathList : allPaths) {
-            log.info("----------------------------------------------------------");
-            log.info("<<< Path " + ++i + " >>>");
-            for (org.eclipse.aether.graph.DependencyNode node : pathList) {
-                log.info(node.getArtifact().toString());
-            }
-            log.info("----------------------------------------------------------");
+        CollectRequest collectRequest = new CollectRequest();
+        collectRequest.setRoot(dependency);
+        collectRequest.setRepositories(repositories);
+        
+        CollectResult collectResult;
+        try {
+            // builds the dependency graph without downloading actual artifact files
+            collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
+            org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
+            return rootNode;
+        } catch (DependencyCollectionException e) {
+            log.error("Could not collect dependencies", e);
+            return null;
         }
     }
 
