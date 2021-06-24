@@ -322,16 +322,32 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         Artifact artifact = getArtifact(item);
 
         org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
-        boolean dependencyFound = false;
-        for (org.eclipse.aether.graph.DependencyNode child : rootNode.getChildren()) {
-            if (child.getArtifact().getGroupId().equals(packageDepGroupId) &&
-                child.getArtifact().getArtifactId().equals(packageDepArtifactId)) {
-                    log.info("Version for " + packageDep + " : " + child.getArtifact().getVersion());
-                    dependencyFound = true;
-            }
-        }
-        if (!dependencyFound) {
+        // an alternative to recursion search everytime would be to build a list of all child dependencies belonging to each umbrella feature
+        // and just doing a simple search on the list
+        String version = dependencyVersionSearch(rootNode, packageDepGroupId, packageDepArtifactId);
+        if (version != null) {
+            log.info("Version for " + packageDep + " : " + version);
+        } else {
             log.info("Dependency not found under this umbrella dependency.");
+        }
+    }
+
+    private String dependencyVersionSearch(org.eclipse.aether.graph.DependencyNode node, String depGroupId, String depArtifactId) {
+        if (node.getArtifact().getGroupId().equals(depGroupId) &&
+            node.getArtifact().getArtifactId().equals(depArtifactId)) {
+                return node.getArtifact().getVersion();
+        }
+        else {
+            if (node.getChildren().isEmpty()) {
+                return null;
+            }
+            for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
+                String version = dependencyVersionSearch(child, depGroupId, depArtifactId);
+                if (version != null) {
+                    return version;
+                }
+            }
+            return null;
         }
     }
 
