@@ -453,13 +453,13 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             lookupDependencies.removeAll(umbrellaDependencies);
             logArtifacts(lookupDependencies, "LOOKUP DEPENDENCIES");
 
-            Set<String> lookupClasses = getLookupClasses(artifactClassMap, dependencyClasses, testOnlyDependencyClasses, umbrellaDependencies);
+            Map<Artifact, Set<String>> lookupClassMap = getLookupClasses(artifactClassMap, dependencyClasses, testOnlyDependencyClasses, umbrellaDependencies);
             log.info( "<<< LOOKUP CLASSES >>>" );
-            log.info(lookupClasses.toString());
+            log.info(lookupClassMap.toString());
 
-            Set<String> lookupPackages = getLookupPackages(lookupClasses);
+            Map<Artifact, Set<String>> lookupPackageMap = getLookupPackages(lookupClassMap);
             log.info( "<<< LOOKUP PACKAGES >>>" );
-            log.info(lookupPackages.toString());
+            log.info(lookupPackageMap.toString());
         } catch (ProjectDependencyAnalyzerException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -527,30 +527,35 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         return umbrellaDependencies;
     }
         
-    private Set<String> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, 
+    private Map<Artifact, Set<String>> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, 
                                          Set<String> testOnlyDependencyClasses, Set<Artifact> umbrellaDependencies) {
-        Set<String> lookupClasses = new HashSet<>();
+        Map<Artifact, Set<String>> lookupClassMap = new LinkedHashMap<>();
         for (Artifact a : umbrellaDependencies) {
             Set<String> artifactClasses = artifactClassMap.get(a);
+            Set<String> lookupClasses = new HashSet<>();
             for (String depClass : dependencyClasses) {
                 if (artifactClasses.contains(depClass) && !testOnlyDependencyClasses.contains(depClass)) {
-                    // may need to check for duplicates
                     lookupClasses.add(depClass);
                 }
             }
+            lookupClassMap.put(a, lookupClasses);
         }
-        return lookupClasses;
+        return lookupClassMap;
     }
 
-    private Set<String> getLookupPackages(Set<String> lookupClasses) {
-        Set<String> lookupPackages = new HashSet<>();
-        for (String lookupClass : lookupClasses) {
-            String[] packageSegments = lookupClass.split("\\.");
-            String lookupPackage = lookupClass.replace("." + packageSegments[packageSegments.length - 1], "");
-            if (!lookupPackages.contains(lookupPackage)) {
-                lookupPackages.add(lookupPackage);
+    private Map<Artifact, Set<String>> getLookupPackages(Map<Artifact, Set<String>> lookupClassMap) {
+        Map<Artifact, Set<String>> lookupPackageMap = new LinkedHashMap<>();
+        for (Artifact a : lookupClassMap.keySet()) {
+            Set<String> lookupPackages = new HashSet<>();
+            for (String lookupClass : lookupClassMap.get(a)) {
+                String[] packageSegments = lookupClass.split("\\.");
+                String lookupPackage = lookupClass.replace("." + packageSegments[packageSegments.length - 1], "");
+                if (!lookupPackages.contains(lookupPackage)) {
+                    lookupPackages.add(lookupPackage);
+                }
             }
+            lookupPackageMap.put(a, lookupPackages);
         }
-        return lookupPackages;
+        return lookupPackageMap;
     }
 }
