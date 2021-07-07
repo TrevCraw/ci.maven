@@ -70,7 +70,7 @@ import org.codehaus.plexus.context.Context;
  * in the featureManager elements in the XML configuration files. Then it generates any
  * missing feature names and stores them in a new featureManager element in a new XML file.
  */
-@Mojo(name = "generate-features", requiresDependencyCollection = ResolutionScope.TEST, requiresDependencyResolution = ResolutionScope.TEST)
+@Mojo(name = "generate-features", requiresDependencyCollection = ResolutionScope.COMPILE, requiresDependencyResolution = ResolutionScope.COMPILE)
 public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     protected static final String PLUGIN_ADDED_FEATURES_FILE = "configDropins/overrides/liberty-plugin-added-features.xml";
