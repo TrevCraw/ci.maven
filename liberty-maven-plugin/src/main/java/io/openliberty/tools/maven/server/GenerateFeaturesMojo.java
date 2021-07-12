@@ -29,6 +29,8 @@ import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,6 +51,7 @@ import org.apache.maven.model.DependencyManagement;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
 import org.codehaus.mojo.pluginsupport.util.ArtifactItem;
 import org.eclipse.aether.collection.CollectRequest;
@@ -69,13 +72,18 @@ import io.openliberty.tools.maven.InstallFeatureSupport;
 import io.openliberty.tools.maven.server.types.FeatureLookupEntry;
 import io.openliberty.tools.maven.server.types.FeatureLookupTable;
 
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer;
+import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
+import org.apache.maven.shared.dependency.analyzer.DefaultProjectDependencyAnalyzer;
+
 /**
  * This mojo generates the features required in the featureManager element in server.xml.
  * It examines the dependencies declared in the pom.xml and the features already declared
  * in the featureManager elements in the XML configuration files. Then it generates any
  * missing feature names and stores them in a new featureManager element in a new XML file.
  */
-@Mojo(name = "generate-features")
+@Mojo(name = "generate-features", requiresDependencyCollection = ResolutionScope.COMPILE, requiresDependencyResolution = ResolutionScope.COMPILE)
 public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     protected static final String PLUGIN_ADDED_FEATURES_FILE = "configDropins/overrides/liberty-plugin-added-features.xml";
@@ -93,6 +101,9 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     @Parameter(property = "classes")
     private boolean classes;
 
+    @Parameter(property = "analyzeDependencies", defaultValue = "false")
+    private boolean analyzeDependencies;
+
     // TODO add a strategy parameter: nearest public feature, or farthest public feature, or farthest-1?
 
     /*
@@ -101,6 +112,10 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
      */
     @Override
     protected void doExecute() throws Exception {
+        if (analyzeDependencies) {
+            dependencyAnalysis();
+            return;
+        }
         if(!initialize()) {
             return;
         }
@@ -656,6 +671,121 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         return publicFeatures.contains(node.getArtifact().getArtifactId());
     }
 
-    
+    private void dependencyAnalysis() {
+        log.debug("<<<<<<<<<<<< Starting New Dependency Analysis >>>>>>>>>>>");
+        try {
+            //alt analyzer creation
+            //DefaultProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
+            ProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
+            ProjectDependencyAnalysis analysis = analyzer.analyze(project);
+
+            //ProjectDependencyAnalysis analysis;
+            //analysis = createProjectDependencyAnalyzer().analyze( project );
+
+            Set<Artifact> usedDeclared = new LinkedHashSet<>( analysis.getUsedDeclaredArtifacts() );
+            Set<Artifact> usedUndeclared = new LinkedHashSet<>( analysis.getUsedUndeclaredArtifacts() );
+            Set<Artifact> unusedDeclared = new LinkedHashSet<>( analysis.getUnusedDeclaredArtifacts() );
+
+            logArtifacts(usedDeclared, "Used & Declared");
+            logArtifacts(usedUndeclared, "Used & Undeclared");
+            logArtifacts(unusedDeclared, "Unused & Declared");
+
+            Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<>( analysis.getArtifactClassMap() );
+            Set<String> dependencyClasses = new HashSet<>( analysis.getDependencyClasses() );
+            Set<String> testOnlyDependencyClasses = new HashSet<>( analysis.getTestOnlyDependencyClasses() );
+
+            log.debug( "<<< ARTIFACT CLASS MAP >>>" );
+            log.debug(artifactClassMap.toString());
+            log.debug( "<<< DEPENDENCY CLASSES >>>" );
+            log.debug(dependencyClasses.toString());
+            log.debug( "<<< TEST ONLY CLASSES >>>" );
+            log.debug(testOnlyDependencyClasses.toString());
+
+            Set<Artifact> lookupDependencies = new LinkedHashSet<>();
+            lookupDependencies.addAll(usedDeclared);
+            lookupDependencies.addAll(usedUndeclared);
+            lookupDependencies = removeTestArtifacts(lookupDependencies);
+
+            Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
+            umbrellaDependencies.addAll(getUmbrellaDependencies(lookupDependencies));
+            logArtifacts(umbrellaDependencies, "Umbrella Dependencies");
+            lookupDependencies.removeAll(umbrellaDependencies);
+            logArtifacts(lookupDependencies, "LOOKUP DEPENDENCIES");
+
+            Map<Artifact, Set<String>> lookupClassMap = getLookupClasses(artifactClassMap, dependencyClasses, testOnlyDependencyClasses, umbrellaDependencies);
+            log.info( "<<< LOOKUP CLASSES >>>" );
+            log.info(lookupClassMap.toString());
+
+            Map<Artifact, Set<String>> lookupPackageMap = getLookupPackages(lookupClassMap);
+            log.info( "<<< LOOKUP PACKAGES >>>" );
+            log.info(lookupPackageMap.toString());
+        } catch (ProjectDependencyAnalyzerException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+    }
+
+    private void logArtifacts(Set<Artifact> artifacts, String type) {
+        log.info("<<<<< " + type + " >>>>>");
+        log.info(type + " size: " + artifacts.size());
+        for (Artifact a : artifacts) {
+            log.info(a.toString());
+        }
+    }
+
+    private Set<Artifact> removeTestArtifacts(Set<Artifact> artifacts) {
+        Set<Artifact> testArtifacts = new LinkedHashSet<>();
+        for (Artifact a : artifacts) {
+            if(a.getScope().equals("test")) {
+                testArtifacts.add(a);
+            }
+        }
+        logArtifacts(testArtifacts, "Test Dependencies To Remove");
+        artifacts.removeAll(testArtifacts);
+        return artifacts;
+    }
+
+    private Set<Artifact> getUmbrellaDependencies(Set<Artifact> artifacts) {
+        Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
+        for (Artifact a : artifacts) {
+            if (a.getArtifactId().equals("jakarta.jakartaee-api") ||
+                a.getArtifactId().equals("javaee-api")) {
+                    umbrellaDependencies.add(a);
+                }
+        }
+        return umbrellaDependencies;
+    }
+
+    private Map<Artifact, Set<String>> getLookupClasses(Map<Artifact, Set<String>> artifactClassMap, Set<String> dependencyClasses, 
+                                         Set<String> testOnlyDependencyClasses, Set<Artifact> umbrellaDependencies) {
+        Map<Artifact, Set<String>> lookupClassMap = new LinkedHashMap<>();
+        for (Artifact a : umbrellaDependencies) {
+            Set<String> artifactClasses = artifactClassMap.get(a);
+            Set<String> lookupClasses = new HashSet<>();
+            for (String depClass : dependencyClasses) {
+                if (artifactClasses.contains(depClass) && !testOnlyDependencyClasses.contains(depClass)) {
+                    lookupClasses.add(depClass);
+                }
+            }
+            lookupClassMap.put(a, lookupClasses);
+        }
+        return lookupClassMap;
+    }
+
+    private Map<Artifact, Set<String>> getLookupPackages(Map<Artifact, Set<String>> lookupClassMap) {
+        Map<Artifact, Set<String>> lookupPackageMap = new LinkedHashMap<>();
+        for (Artifact a : lookupClassMap.keySet()) {
+            Set<String> lookupPackages = new HashSet<>();
+            for (String lookupClass : lookupClassMap.get(a)) {
+                String[] packageSegments = lookupClass.split("\\.");
+                String lookupPackage = lookupClass.replace("." + packageSegments[packageSegments.length - 1], "");
+                if (!lookupPackages.contains(lookupPackage)) {
+                    lookupPackages.add(lookupPackage);
+                }
+            }
+            lookupPackageMap.put(a, lookupPackages);
+        }
+        return lookupPackageMap;
+    }
 
 }
