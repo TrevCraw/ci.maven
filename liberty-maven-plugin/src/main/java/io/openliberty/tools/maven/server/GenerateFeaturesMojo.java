@@ -53,6 +53,8 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.ProjectBuildingException;
+import org.apache.maven.project.ProjectBuildingResult;
 import org.codehaus.mojo.pluginsupport.util.ArtifactItem;
 import org.eclipse.aether.collection.CollectRequest;
 import org.eclipse.aether.collection.CollectResult;
@@ -75,7 +77,11 @@ import io.openliberty.tools.maven.server.types.FeatureLookupTable;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
-import org.apache.maven.shared.dependency.analyzer.DefaultProjectDependencyAnalyzer;
+
+import org.codehaus.plexus.PlexusContainer;
+import org.codehaus.plexus.DefaultPlexusContainer;
+import org.codehaus.plexus.PlexusConstants;
+import org.codehaus.plexus.context.Context;
 
 /**
  * This mojo generates the features required in the featureManager element in server.xml.
@@ -104,6 +110,21 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     @Parameter(property = "analyzeDependencies", defaultValue = "false")
     private boolean analyzeDependencies;
 
+    @Parameter(property = "end2end", defaultValue = "false")
+    private boolean end2end;
+
+    @Parameter(property = "bomFile")
+    private String bomFile;
+
+    @Parameter(property = "printTree", defaultValue = "false")
+    private boolean printTree;
+
+    @Parameter(property = "dep")
+    private String dep;
+
+    @Parameter(property = "pomToUse")
+    private String pomToUse;
+
     // TODO add a strategy parameter: nearest public feature, or farthest public feature, or farthest-1?
 
     /*
@@ -112,8 +133,16 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
      */
     @Override
     protected void doExecute() throws Exception {
+        if (printTree) {
+            filterDependencyTree(dep);
+            return;
+        }
         if (analyzeDependencies) {
             dependencyAnalysis();
+            return;
+        }
+        if (end2end) {
+            runEndToEnd();
             return;
         }
         if(!initialize()) {
@@ -164,7 +193,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
                                         }
                                     }
                                 }
-                                log.info("Packages: " + packageNames);
+                                //log.info("Packages: " + packageNames);
                                 featureLookupEntry.javaPackageNames = packageNames;
                             } catch (MojoExecutionException e) {
                                 log.warn(e.getMessage());
@@ -232,13 +261,13 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         List<File> allFeatureFiles = new ArrayList<File>();
         recursiveAddFeaturesFiles(featureVisibilityDir, allFeatureFiles);
 
-        log.info("All features size " + allFeatureFiles.size());
+        //log.info("All features size " + allFeatureFiles.size());
 
         // unique set of artifact items (to avoid duplicates)
         Set<HashableArtifactItem> allArtifactItems = new HashSet<HashableArtifactItem>();
 
         for (File featureFile : allFeatureFiles) {
-            log.info(featureFile.getAbsolutePath());
+            //log.info(featureFile.getAbsolutePath());
 
             try {
                 addArtifactsFromFeatureFile(featureFile, allArtifactItems);
@@ -265,7 +294,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             String match = m.group();
             // get the part within quotes
             String coordinates = match.substring(KEYWORD.length() + 2, match.length() - 1);
-            log.info("File " + featureFile + " has mavenCoordinates " + coordinates);
+            //log.info("File " + featureFile + " has mavenCoordinates " + coordinates);
 
             String[] tokens = coordinates.split(":");
             if (tokens.length != 3) {
@@ -307,6 +336,10 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     }
 
     private String getFilter(ArtifactItem artifact) {
+        return artifact.getGroupId() + ":" + artifact.getArtifactId() + "::" + artifact.getVersion();
+    }
+
+    private String getFilter(Artifact artifact) {
         return artifact.getGroupId() + ":" + artifact.getArtifactId() + "::" + artifact.getVersion();
     }
 
@@ -425,59 +458,24 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     }
 
     private FeatureLookupEntry filterDependency(String includesPattern, Set<String> publicFeatures) throws DependencyResolutionException, MojoExecutionException {
-        log.debug("<<<<<<<<<<<< Finding Dependency Paths >>>>>>>>>>>");
-        DependencyManagement dm = project.getDependencyManagement();
-        // null check for dm
-        if (dm == null) {
-            log.debug("DependencyManagement is null");
-            return null;
-        }
-        List<Dependency> dependencies = dm.getDependencies();
-        List<Artifact> artifacts = new ArrayList<Artifact>();
-        for (Dependency dep : dependencies) {
-            ArtifactItem item = new ArtifactItem();
-            item.setGroupId(dep.getGroupId());
-            item.setArtifactId(dep.getArtifactId());
-            // force the collection to get only the pom, not the actual artifact type
-            item.setType("pom");
-            item.setVersion(dep.getVersion());
-
-            artifacts.add(getArtifact(item));
-        }
-
+        List<Artifact> artifacts = retrieveProjectArtifacts();
         List<List<org.eclipse.aether.graph.DependencyNode>> allPaths = new ArrayList<List<org.eclipse.aether.graph.DependencyNode>>();
 
         for (Artifact artifact : artifacts) {
-            org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
-                    artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
-            org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(aetherArtifact, null, true);
-
-            CollectRequest collectRequest = new CollectRequest();
-            collectRequest.setRoot(dependency);
-            collectRequest.setRepositories(repositories);
-            
-            CollectResult collectResult;
-            try {
-                // builds the dependency graph without downloading actual artifact files
-                collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
-
-                org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
-                org.eclipse.aether.graph.DependencyFilter depFilter = new org.eclipse.aether.util.filter.PatternInclusionsDependencyFilter(
-                        includesPattern);
-                org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor filteringVisitor = new org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor(
-                        depFilter);
-                rootNode.accept(filteringVisitor);
-                List<List<org.eclipse.aether.graph.DependencyNode>> nodeList = filteringVisitor.getPaths();
-                if (nodeList == null || nodeList.isEmpty()) {
-                    log.debug("No Paths");
-                } else {
-                    for (List<org.eclipse.aether.graph.DependencyNode> pathList : nodeList) {
-                        allPaths.add(pathList);
-                        log.debug("Path added");
-                    }
+            org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+            org.eclipse.aether.graph.DependencyFilter depFilter = new org.eclipse.aether.util.filter.PatternInclusionsDependencyFilter(
+                    includesPattern);
+            org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor filteringVisitor = new org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor(
+                    depFilter);
+            rootNode.accept(filteringVisitor);
+            List<List<org.eclipse.aether.graph.DependencyNode>> nodeList = filteringVisitor.getPaths();
+            if (nodeList == null || nodeList.isEmpty()) {
+                log.debug("No Paths");
+            } else {
+                for (List<org.eclipse.aether.graph.DependencyNode> pathList : nodeList) {
+                    allPaths.add(pathList);
+                    log.debug("Path added");
                 }
-            } catch (DependencyCollectionException e) {
-                log.error("Could not collect dependencies", e);
             }
         }
 
@@ -516,9 +514,9 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
         String mostCommonPublicFeature = null;
         int mostFeatureOccurrences = 0;
-        //log.info("===== Keyset size " + publicFeatureOccurrences.keySet().size()); 
+        log.debug("===== Keyset size " + publicFeatureOccurrences.keySet().size()); 
         for (String publicFeature : publicFeatureOccurrences.keySet()) {
-            //log.info("===== Looking at feature " + publicFeature); 
+            log.debug("===== Looking at feature " + publicFeature); 
             int occurrences = publicFeatureOccurrences.get(publicFeature);
             if (occurrences > mostFeatureOccurrences) {
                 mostCommonPublicFeature = publicFeature;
@@ -530,11 +528,11 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         featureLookupEntry.mavenDependency = includesPattern;
         featureLookupEntry.featureName = mostCommonPublicFeature;
         if (publicFeatureOccurrences.size() > 1) {
-            log.info("Dependency [" + includesPattern + "] -> Feature [" + mostCommonPublicFeature + "].  Occurrences: " + publicFeatureOccurrences);
+            log.debug("Dependency [" + includesPattern + "] -> Feature [" + mostCommonPublicFeature + "].  Occurrences: " + publicFeatureOccurrences);
             featureLookupEntry.occurrences = publicFeatureOccurrences;
             findConflicts(mostFeatureOccurrences, publicFeatureOccurrences, featureLookupEntry);
         } else {
-            log.info("Dependency [" + includesPattern + "] -> Feature [" + mostCommonPublicFeature + "]");
+            log.debug("Dependency [" + includesPattern + "] -> Feature [" + mostCommonPublicFeature + "]");
         }
         return featureLookupEntry;
     }
@@ -568,7 +566,8 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
         MYFACES("org.apache.myfaces.core:myfaces-api", "jsf"),
         REACTIVE_STREAMS("org.reactivestreams:reactive-streams", "mpReactiveStreams"),
-        PERSISTENCE("org.eclipse.persistence:javax.persistence", "jpa");
+        PERSISTENCE("org.eclipse.persistence:javax.persistence", "jpa"),
+        CDI("javax.enterprise:cdi-api", "cdi");
     
         String dependency;
         String feature;
@@ -641,7 +640,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             }
         }
         if (potentialConflicts.size() > 1) {
-            log.info("===== CONFLICTS: " + potentialConflicts);
+            //log.info("===== CONFLICTS: " + potentialConflicts);
             featureLookupEntry.conflicts = potentialConflicts;
         }
     }
@@ -672,15 +671,9 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
     }
 
     private void dependencyAnalysis() {
-        log.debug("<<<<<<<<<<<< Starting New Dependency Analysis >>>>>>>>>>>");
         try {
-            //alt analyzer creation
-            //DefaultProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
-            ProjectDependencyAnalyzer analyzer = new DefaultProjectDependencyAnalyzer();
-            ProjectDependencyAnalysis analysis = analyzer.analyze(project);
-
-            //ProjectDependencyAnalysis analysis;
-            //analysis = createProjectDependencyAnalyzer().analyze( project );
+            ProjectDependencyAnalysis analysis;
+            analysis = createProjectDependencyAnalyzer().analyze( project );
 
             Set<Artifact> usedDeclared = new LinkedHashSet<>( analysis.getUsedDeclaredArtifacts() );
             Set<Artifact> usedUndeclared = new LinkedHashSet<>( analysis.getUsedUndeclaredArtifacts() );
@@ -722,6 +715,9 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         } catch (ProjectDependencyAnalyzerException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
+        } catch (MojoExecutionException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
         }
     }
 
@@ -740,7 +736,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
                 testArtifacts.add(a);
             }
         }
-        logArtifacts(testArtifacts, "Test Dependencies To Remove");
+        //logArtifacts(testArtifacts, "Test Dependencies To Remove");
         artifacts.removeAll(testArtifacts);
         return artifacts;
     }
@@ -788,4 +784,465 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         return lookupPackageMap;
     }
 
+    /**
+     * FROM: https://github.com/apache/maven-dependency-plugin/blob/a0ac6fedf87dec9ec3ca93dd83d28ef2828cb544/src/main/java/org/apache/maven/plugins/dependency/analyze/AbstractAnalyzeMojo.java#L258
+     * @return {@link ProjectDependencyAnalyzer}
+     * @throws MojoExecutionException in case of an error.
+     */
+    protected ProjectDependencyAnalyzer createProjectDependencyAnalyzer()
+        throws MojoExecutionException
+    {
+
+        final String role = ProjectDependencyAnalyzer.ROLE;
+        final String roleHint = "default";
+
+        try
+        {
+            DefaultPlexusContainer defaultContainer = new DefaultPlexusContainer();
+            Context context = defaultContainer.getContext();
+            final PlexusContainer container = (PlexusContainer) context.get( PlexusConstants.PLEXUS_KEY );
+
+            return (ProjectDependencyAnalyzer) container.lookup( role, roleHint );
+        }
+        catch ( Exception exception )
+        {
+            throw new MojoExecutionException( "Failed to instantiate ProjectDependencyAnalyser with role " + role
+                + " / role-hint " + roleHint, exception );
+        }
+    }
+
+    private void runEndToEnd() throws Exception {
+        File openLibertyRepoDir = repoSetup();
+        Map<Artifact, Set<String>> artifactPackageMap = getPackageMap(openLibertyRepoDir);
+
+        /** Start of Analysis */
+
+        ProjectDependencyAnalysis analysis;
+        analysis = createProjectDependencyAnalyzer().analyze( project );
+
+        Set<Artifact> lookupDependencies = getLookupDependencies(analysis);
+        Set<Artifact> umbrellaDependencies = getUmbrellaDependencies(lookupDependencies);
+        lookupDependencies.removeAll(umbrellaDependencies);
+        logArtifacts(lookupDependencies, "LOOKUP DEPENDENCIES");
+
+        Map<Artifact, Set<String>> lookupPackageMap = getLookupPackageMap(analysis, umbrellaDependencies);
+        lookupPackageMap = convertToSlashes(lookupPackageMap);
+        log.info( "<<< LOOKUP PACKAGES >>>" );
+        log.info(lookupPackageMap.toString());
+
+        /** End of Analysis */
+
+        log.info( "<<< After Analysis >>>" );
+        log.info("Project ID: " + project.getArtifactId());
+
+        ProjectBuildingResult build = null;
+        File buildFile = new File(bomFile);
+        log.info("New build file: " + buildFile.toString());
+        try {
+            build = mavenProjectBuilder.build(buildFile,
+                    session.getProjectBuildingRequest().setResolveDependencies(false));
+        } catch (ProjectBuildingException e) {
+            log.error("Could not parse pom.xml. " + e.getMessage());
+            log.debug(e);
+        }
+
+        // set the updated project in current session
+        MavenProject backupProject = project;
+        if (build != null) {
+            project = build.getProject();
+            session.setCurrentProject(project);
+        } else {
+            log.info("New build is null");
+        }
+
+        log.info( "<<< Before Lookup >>>" );
+        log.info("Project ID: " + project.getArtifactId());
+
+        /** Start of Lookup */
+
+        Set<FeatureLookupEntry> featureLookupEntries = new LinkedHashSet<>();
+        Set<String> publicFeatures = getPublicFeatures();
+
+        for (Artifact a : lookupDependencies) {
+            FeatureLookupEntry featureLookupEntry = filterDependency(getFilter(a), publicFeatures);
+            featureLookupEntries.add(featureLookupEntry);
+        }
+
+        log.info("<<<<< FEATURE LIST >>>>>");
+        log.info("Size: " + featureLookupEntries.size());
+        for (FeatureLookupEntry entry : featureLookupEntries) {
+            if (entry.featureName != null && !entry.featureName.equals("")) {
+                log.info(entry.featureName);
+            }
+        }
+
+        Map<Artifact, Set<Artifact>> packageDeps = getPackageDependencies(lookupPackageMap, artifactPackageMap);
+        log.info( "<<< Package Dependency Map >>>" );
+        log.info(packageDeps.toString());
+
+        Set<FeatureLookupEntry> packageFeatures = getPackageFeatures(packageDeps, publicFeatures);
+        log.info("<<<<< PACKAGE FEATURE LIST >>>>>");
+        log.info("Size: " + packageFeatures.size());
+        for (FeatureLookupEntry entry : packageFeatures) {
+            if (entry.featureName != null && !entry.featureName.equals("")) {
+                log.info(entry.featureName);
+            }
+        }
+
+        Set<FeatureLookupEntry> generateFeaturesList = new HashSet<>();
+        generateFeaturesList.addAll(featureLookupEntries);
+        generateFeaturesList.addAll(packageFeatures);
+        log.info("<<<<< GENERATE FEATURES LIST >>>>>");
+        for (FeatureLookupEntry entry : generateFeaturesList) {
+            if (entry.featureName == null || entry.featureName.equals("")) {
+                log.debug("No feature mapping for: " + entry.mavenDependency);
+            } else {
+                log.info(entry.featureName);
+            }
+        }
+
+        /** End of Lookup */
+
+        project = backupProject;
+        session.setCurrentProject(backupProject);
+
+        log.info( "<<< After Lookup >>>" );
+        log.info("Project ID: " + project.getArtifactId());
+    }
+
+    private Set<Artifact> getLookupDependencies(ProjectDependencyAnalysis analysis) {
+        Set<Artifact> usedDeclared = new LinkedHashSet<>( analysis.getUsedDeclaredArtifacts() );
+        Set<Artifact> usedUndeclared = new LinkedHashSet<>( analysis.getUsedUndeclaredArtifacts() );
+        Set<Artifact> unusedDeclared = new LinkedHashSet<>( analysis.getUnusedDeclaredArtifacts() );
+
+        logArtifacts(usedDeclared, "Used & Declared");
+        logArtifacts(usedUndeclared, "Used & Undeclared");
+        logArtifacts(unusedDeclared, "Unused & Declared");
+
+        Set<Artifact> lookupDependencies = new LinkedHashSet<>();
+        lookupDependencies.addAll(usedDeclared);
+        lookupDependencies.addAll(usedUndeclared);
+        lookupDependencies = removeTestArtifacts(lookupDependencies);
+        return lookupDependencies;
+    }
+
+    private Map<Artifact, Set<String>> getLookupPackageMap(ProjectDependencyAnalysis analysis, Set<Artifact> umbrellaDependencies) {
+        Map<Artifact, Set<String>> artifactClassMap = new LinkedHashMap<>( analysis.getArtifactClassMap() );
+        log.debug( "<<< ARTIFACT CLASS MAP >>>" );
+        log.debug(artifactClassMap.toString());
+
+        Set<String> dependencyClasses = new HashSet<>( analysis.getDependencyClasses() );
+        log.debug( "<<< DEPENDENCY CLASSES >>>" );
+        log.debug(dependencyClasses.toString());
+
+        Set<String> testOnlyDependencyClasses = new HashSet<>( analysis.getTestOnlyDependencyClasses() );
+        log.debug( "<<< TEST ONLY CLASSES >>>" );
+        log.debug(testOnlyDependencyClasses.toString());
+
+        Map<Artifact, Set<String>> lookupClassMap = getLookupClasses(artifactClassMap, dependencyClasses, testOnlyDependencyClasses, umbrellaDependencies);
+        log.debug( "<<< LOOKUP CLASSES >>>" );
+        log.debug(lookupClassMap.toString());
+
+        Map<Artifact, Set<String>> lookupPackageMap = getLookupPackages(lookupClassMap);
+        log.debug( "<<< LOOKUP PACKAGES >>>" );
+        log.debug(lookupPackageMap.toString());
+        return lookupPackageMap;
+    }
+
+    private File repoSetup() throws MojoExecutionException {
+        if (openLibertyRepo == null) {
+            openLibertyRepo = "../open-liberty";
+        }
+        File openLibertyRepoDir = new File(openLibertyRepo);
+
+        if (!openLibertyRepoDir.exists()) {
+            try {
+                throw new MojoExecutionException("open-liberty git repository must exist at " + openLibertyRepoDir.getCanonicalPath() + ", or use -DopenLibertyRepo to specify custom location");
+            } catch (IOException e) {
+                throw new MojoExecutionException("open-liberty git repository must exist at " + openLibertyRepoDir.getAbsolutePath() + ", or use -DopenLibertyRepo to specify custom location");
+            }
+        }
+
+        return openLibertyRepoDir;
+    }
+
+    private Map<Artifact, Set<Artifact>> getPackageDependencies(Map<Artifact, Set<String>> lookupPackageMap, Map<Artifact, Set<String>> artifactPackageMap) {
+        Map<Artifact, Set<Artifact>> packageDepsMap = new HashMap<>();
+        // Set up new map to enable adding Artifacts to the Set later
+        for (Artifact umbrellaDep : lookupPackageMap.keySet()) {
+            packageDepsMap.put(umbrellaDep, new HashSet<Artifact>());
+        }
+
+        for (Artifact mavenDep : artifactPackageMap.keySet()) {
+            for (Artifact umbrellaDep : lookupPackageMap.keySet()) {
+                for (String pkg : lookupPackageMap.get(umbrellaDep)) {
+                    if (artifactPackageMap.get(mavenDep).contains(pkg)) {
+                        packageDepsMap.get(umbrellaDep).add(mavenDep);
+                    }
+                }
+            }
+        }
+
+        return packageDepsMap;
+    }
+
+    private Set<FeatureLookupEntry> getPackageFeatures(Map<Artifact, Set<Artifact>> packageDepsMap, Set<String> publicFeatures) throws DependencyResolutionException, MojoExecutionException {
+        List<String> mvnDepList = new ArrayList<>();
+        List<String> checkedList = new ArrayList<>();
+        for (Artifact umbrellaDep : packageDepsMap.keySet()) {
+            String umbrellaDepName = umbrellaDep.getGroupId() + ":" + umbrellaDep.getArtifactId() +
+                                     ":pom:" + umbrellaDep.getVersion();
+            for (Artifact mvnDep : packageDepsMap.get(umbrellaDep)) {
+                if (mvnDep == null) {
+                    continue;
+                }
+                String mvnDepName = mvnDep.getGroupId() + ":" + mvnDep.getArtifactId();
+                if (!checkedList.contains(mvnDepName)) {
+                    checkedList.add(mvnDepName);
+                    String version = findDependencyVersion(mvnDepName, umbrellaDepName);
+                    if (version!= null) {
+                        log.info(mvnDepName + " version " + version);
+                        mvnDepList.add(mvnDepName + "::" + version);
+                    }
+                    else {
+                        log.info(mvnDepName + " not found under " + umbrellaDepName);
+                    }
+                }
+            }
+        }
+
+        Set<FeatureLookupEntry> featureList = new HashSet<>();
+        for (String dep : mvnDepList) {
+            FeatureLookupEntry featureLookupEntry = filterDependency(dep, publicFeatures);
+            featureList.add(featureLookupEntry);
+        }
+        return featureList;
+    }
+
+    private Map<Artifact, Set<String>> getPackageMap(File openLibertyRepoDir) throws Exception {
+        Map<Artifact, Set<String>> packageMap = new HashMap<>();
+        Set<HashableArtifactItem> featureDefinedMavenArtifacts = getFeatureDefinedMavenArtifacts(openLibertyRepoDir);
+        List<HashableArtifactItem> sortedArtifactItems = new ArrayList<HashableArtifactItem>(featureDefinedMavenArtifacts);
+        Collections.sort(sortedArtifactItems, new ArtifactComparator());
+
+        //log.info("All artifacts: " + sortedArtifactItems.toString());
+
+        for (ArtifactItem artifactItem : sortedArtifactItems) {
+            // resolve artifact file and list its zip contents
+            try {
+                Artifact artifact = getArtifact(artifactItem);
+                boolean printPackages = false;
+                if ((artifact.getGroupId().equals("jakarta.enterprise") && artifact.getArtifactId().equals("jakarta.enterprise.cdi-api")) ||
+                (artifact.getGroupId().equals("jakarta.ws.rs") && artifact.getArtifactId().equals("jakarta.ws.rs-api"))) {
+                    log.info("Retrieving packages for: " + artifact.getArtifactId() + ":" + artifact.getVersion());
+                    printPackages = true;
+                }
+
+                Set<String> packageNames = new HashSet<String>();
+                try (ZipFile zipFile = new ZipFile(artifact.getFile())) {
+                    Enumeration<? extends ZipEntry> zipEntries = zipFile.entries();
+                    while (zipEntries.hasMoreElements()) {
+                        ZipEntry element = zipEntries.nextElement();
+                        String name = element.getName();
+                        if (!element.isDirectory() && name.endsWith(".class")) {
+                            if (name.contains("/")) {
+                                packageNames.add(name.substring(0, name.lastIndexOf("/")));
+                            }
+                        }
+                    }
+                }
+                if (printPackages) {
+                    log.info("Packages: " + packageNames);
+                }
+                packageMap.put(artifact, packageNames);
+            } catch (MojoExecutionException e) {
+                log.warn(e.getMessage());
+            }
+        }
+        return packageMap;
+    }
+
+    private Map<Artifact, Set<String>> convertToSlashes(Map<Artifact, Set<String>> packageMap) {
+        for (Artifact key : packageMap.keySet()) {
+            Set<String> oldList = packageMap.get(key);
+            Set<String> newList = new HashSet<>();
+            for (String pkg : oldList) {
+                String newPkg = pkg.replace(".", "/");
+                newList.add(newPkg);
+            }
+            packageMap.replace(key, newList);
+        }
+        //log.info("New Package Map");
+        //log.info(packageMap.toString());
+        return packageMap;
+    }
+
+    // packageDep example: org.eclipse.microprofile.health:microprofile-health-api
+    // umbrellaDep example: org.eclipse.microprofile:microprofile:pom:3.0
+    private String findDependencyVersion(String packageDep, String umbrellaDep) throws DependencyResolutionException, MojoExecutionException {
+        String packageDepGroupId = packageDep.split(":")[0];
+        String packageDepArtifactId = packageDep.split(":")[1];
+
+        String umbrellaDepGroupId = umbrellaDep.split(":")[0];
+        String umbrellaDepArtifactId = umbrellaDep.split(":")[1];
+        String umbrellaDepVersion = umbrellaDep.split(":")[3];
+
+        if (umbrellaDepGroupId.equals("jakarta.platform") && umbrellaDepArtifactId.equals("jakarta.jakartaee-api")
+            && umbrellaDepVersion.equals("8.0.0")) {
+                umbrellaDepGroupId = "javax";
+                umbrellaDepArtifactId = "javaee-api";
+                umbrellaDepVersion = "8.0";
+        }
+
+        ArtifactItem item = new ArtifactItem();
+        item.setGroupId(umbrellaDepGroupId);
+        item.setArtifactId(umbrellaDepArtifactId);
+        item.setType("pom");
+        item.setVersion(umbrellaDepVersion);
+        Artifact artifact = getArtifact(item);
+
+        org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+        // an alternative to recursion search everytime would be to build a list of all child dependencies belonging to each umbrella feature
+        // and just doing a simple search on the list
+        String version = dependencyVersionSearch(rootNode, packageDepGroupId, packageDepArtifactId, "");
+        return version;
+    }
+
+    private String dependencyVersionSearch(org.eclipse.aether.graph.DependencyNode node, String depGroupId, String depArtifactId, String dash) throws DependencyResolutionException, MojoExecutionException {
+        log.debug(dash + node.toString());
+        log.debug("Children List Size: " + node.getChildren().size());
+        if (node.getArtifact().getGroupId().equals(depGroupId) &&
+            node.getArtifact().getArtifactId().equals(depArtifactId)) {
+                return node.getArtifact().getVersion();
+        }
+        else {
+            if (node.getChildren().isEmpty()) {
+                return null;
+            }
+            for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
+                org.eclipse.aether.graph.DependencyNode resolvedNode = retrieveRootNode(child.getArtifact());
+                String version = dependencyVersionSearch(resolvedNode, depGroupId, depArtifactId, dash + "-");
+                if (version != null) {
+                    return version;
+                }
+            }
+            return null;
+        }
+    }
+
+    private org.eclipse.aether.graph.DependencyNode retrieveRootNode(Artifact artifact) throws DependencyResolutionException, MojoExecutionException {
+        org.eclipse.aether.artifact.Artifact aetherArtifact = new org.eclipse.aether.artifact.DefaultArtifact(
+                artifact.getGroupId(), artifact.getArtifactId(), artifact.getType(), artifact.getVersion());
+        return retrieveRootNode(aetherArtifact);
+    }
+
+    private org.eclipse.aether.graph.DependencyNode retrieveRootNode(org.eclipse.aether.artifact.Artifact artifact) throws DependencyResolutionException, MojoExecutionException {
+        org.eclipse.aether.graph.Dependency dependency = new org.eclipse.aether.graph.Dependency(artifact, null, true);
+
+        CollectRequest collectRequest = new CollectRequest();
+        collectRequest.setRoot(dependency);
+        collectRequest.setRepositories(repositories);
+        
+        CollectResult collectResult;
+        try {
+            // builds the dependency graph without downloading actual artifact files
+            collectResult = repositorySystem.collectDependencies(repoSession, collectRequest);
+            org.eclipse.aether.graph.DependencyNode rootNode = collectResult.getRoot();
+            return rootNode;
+        } catch (DependencyCollectionException e) {
+            log.error("Could not collect dependencies", e);
+            return null;
+        }
+    }
+
+    private void filterDependencyTree(String includesPattern) throws DependencyResolutionException, MojoExecutionException {
+        setPom(pomToUse);
+        List<Artifact> artifacts = retrieveProjectArtifacts();
+        List<List<org.eclipse.aether.graph.DependencyNode>> allPaths = new ArrayList<List<org.eclipse.aether.graph.DependencyNode>>();
+
+        for (Artifact artifact : artifacts) {
+            log.info("Artifact: " + artifact.toString());
+            org.eclipse.aether.graph.DependencyNode rootNode = retrieveRootNode(artifact);
+            log.info("Dependency Node: " + rootNode.toString());
+            log.info("Dependency Node Children: " + rootNode.getChildren().toString());
+            printNodeTree(rootNode, "");
+            org.eclipse.aether.graph.DependencyFilter depFilter = new org.eclipse.aether.util.filter.PatternInclusionsDependencyFilter(
+                    includesPattern);
+            org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor filteringVisitor = new org.eclipse.aether.util.graph.visitor.PathRecordingDependencyVisitor(
+                    depFilter);
+            rootNode.accept(filteringVisitor);
+            List<List<org.eclipse.aether.graph.DependencyNode>> nodeList = filteringVisitor.getPaths();
+            if (nodeList == null || nodeList.isEmpty()) {
+                log.debug("No Paths");
+            } else {
+                for (List<org.eclipse.aether.graph.DependencyNode> pathList : nodeList) {
+                    allPaths.add(pathList);
+                    log.debug("Path added");
+                }
+            }
+        }
+
+        log.info("Dependency paths for: " + includesPattern);
+        int i = 0;
+        for (List<org.eclipse.aether.graph.DependencyNode> pathList : allPaths) {
+            log.info("----------------------------------------------------------");
+            log.info("<<< Path " + ++i + " >>>");
+            for (org.eclipse.aether.graph.DependencyNode node : pathList) {
+                log.info(node.getArtifact().toString());
+            }
+            log.info("----------------------------------------------------------");
+        }
+    }
+
+    private List<Artifact> retrieveProjectArtifacts() throws MojoExecutionException {
+        DependencyManagement dm = project.getDependencyManagement();
+        List<Dependency> dependencies;
+        if (dm != null) {
+            dependencies = dm.getDependencies();
+        }
+        else {
+            log.debug("DependencyManagement is null. Retrieve dependencies directly through project.");
+            dependencies = project.getDependencies();
+        }
+        List<Artifact> artifacts = new ArrayList<Artifact>();
+        for (Dependency dep : dependencies) {
+            ArtifactItem item = new ArtifactItem();
+            item.setGroupId(dep.getGroupId());
+            item.setArtifactId(dep.getArtifactId());
+            // force the collection to get only the pom, not the actual artifact type
+            item.setType("pom");
+            item.setVersion(dep.getVersion());
+            artifacts.add(getArtifact(item));
+        }
+        return artifacts;
+    }
+
+    private void setPom(String pom) {
+        ProjectBuildingResult build = null;
+        File buildFile = new File(project.getBasedir(), pom);
+        log.info("New build file: " + buildFile.toString());
+        try {
+            build = mavenProjectBuilder.build(buildFile,
+                    session.getProjectBuildingRequest().setResolveDependencies(false));
+        } catch (ProjectBuildingException e) {
+            log.error("Could not parse pom.xml. " + e.getMessage());
+            log.debug(e);
+        }
+        if (build != null) {
+            project = build.getProject();
+            session.setCurrentProject(project);
+        } else {
+            log.info("New build is null");
+        }
+    }
+
+    private void printNodeTree(org.eclipse.aether.graph.DependencyNode node, String dash) throws MojoExecutionException, DependencyResolutionException {
+        log.info(dash + node.toString());
+        //log.info("Children List Size: " + node.getChildren().size());
+
+        for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
+            org.eclipse.aether.graph.DependencyNode newNode = retrieveRootNode(child.getArtifact());
+            printNodeTree(newNode, dash + "-");
+        }
+    }
 }
