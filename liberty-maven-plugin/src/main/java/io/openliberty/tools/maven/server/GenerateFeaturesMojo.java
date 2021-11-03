@@ -145,9 +145,9 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
             runEndToEnd();
             return;
         }
-        if(!initialize()) {
+        /*if(!initialize()) {
             return;
-        }
+        }*/
         if (filterDependency) {
             if (openLibertyRepo == null) {
                 openLibertyRepo = "../open-liberty";
@@ -745,6 +745,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         Set<Artifact> umbrellaDependencies = new LinkedHashSet<>();
         for (Artifact a : artifacts) {
             if (a.getArtifactId().equals("jakarta.jakartaee-api") ||
+                a.getArtifactId().equals("jakarta.jakartaee-web-api") ||
                 a.getArtifactId().equals("javaee-api")) {
                     umbrellaDependencies.add(a);
                 }
@@ -1087,10 +1088,17 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         String umbrellaDepArtifactId = umbrellaDep.split(":")[1];
         String umbrellaDepVersion = umbrellaDep.split(":")[3];
 
-        if (umbrellaDepGroupId.equals("jakarta.platform") && umbrellaDepArtifactId.equals("jakarta.jakartaee-api")
-            && umbrellaDepVersion.equals("8.0.0")) {
+        if (umbrellaDepGroupId.equals("jakarta.platform") && 
+            umbrellaDepArtifactId.equals("jakarta.jakartaee-api") && 
+            umbrellaDepVersion.equals("8.0.0")) {
                 umbrellaDepGroupId = "javax";
                 umbrellaDepArtifactId = "javaee-api";
+                umbrellaDepVersion = "8.0";
+        } else if (umbrellaDepGroupId.equals("jakarta.platform") && 
+            umbrellaDepArtifactId.equals("jakarta.jakartaee-web-api") && 
+            umbrellaDepVersion.equals("8.0.0")) {
+                umbrellaDepGroupId = "javax";
+                umbrellaDepArtifactId = "javaee-web-api";
                 umbrellaDepVersion = "8.0";
         }
 
@@ -1114,8 +1122,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
         if (node.getArtifact().getGroupId().equals(depGroupId) &&
             node.getArtifact().getArtifactId().equals(depArtifactId)) {
                 return node.getArtifact().getVersion();
-        }
-        else {
+        } else {
             if (node.getChildren().isEmpty()) {
                 return null;
             }
@@ -1219,7 +1226,7 @@ public class GenerateFeaturesMojo extends InstallFeatureSupport {
 
     private void setPom(String pom) {
         ProjectBuildingResult build = null;
-        File buildFile = new File(project.getBasedir(), pom);
+        File buildFile = new File(pom);
         log.info("New build file: " + buildFile.toString());
         try {
             build = mavenProjectBuilder.build(buildFile,
