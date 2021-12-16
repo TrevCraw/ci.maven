@@ -823,6 +823,7 @@ public class DevMojo extends LooseAppSupport {
                 config = ExecuteMojoUtil.getPluginGoalConfig(libertyPlugin, "install-feature", log);
                 oldConfig = ExecuteMojoUtil.getPluginGoalConfig(backupLibertyPlugin, "install-feature", log);
                 if (!Objects.equals(config, oldConfig)) {
+                    debug("1322: Set installFeature true on DevMojo line 827");
                     installFeature = true;
                 }
                 config = ExecuteMojoUtil.getPluginGoalConfig(libertyPlugin, "deploy", log);
@@ -837,6 +838,7 @@ public class DevMojo extends LooseAppSupport {
                     runBoostPackage = true;
                     // detect esa dependency changes
                     if (!getEsaDependency(deps).equals(getEsaDependency(oldDeps))) {
+                        debug("1322: Set installFeature true on DevMojo line 842");
                         installFeature = true;
                     }
                     // detect compile dependency changes
@@ -870,12 +872,18 @@ public class DevMojo extends LooseAppSupport {
                     util.restartServer();
                     return true;
                 } else {
+                    boolean generateFeaturesSuccess = true; // start off as true, because we may not actually need to generate features
                     // TODO: confirm that a call to generate features is required when a build file is modified 
                     // (ie. changes are not picked up by class file changes)
                     if (compileDependenciesChanged && generateFeatures) {
+                        generateFeaturesSuccess = false; // set false because now we should generate features
                         // build file change - provide updated classes and all existing features to binary scanner
                         Collection<String> javaSourceClassPaths = util.getJavaSourceClassPaths();
-                        libertyGenerateFeatures(javaSourceClassPaths, false);
+                        debug("1322: Calling libertyGenerateFeatures from DevMojo line 882");
+                        generateFeaturesSuccess = libertyGenerateFeatures(javaSourceClassPaths, false);
+                        if (generateFeaturesSuccess) {
+                            clearJavaSourceClasses();
+                        }
                     }
                     if (isUsingBoost() && (createServer || runBoostPackage)) {
                         log.info("Running boost:package");
@@ -885,7 +893,8 @@ public class DevMojo extends LooseAppSupport {
                     } else if (redeployApp) {
                     	runLibertyMojoDeploy();
                     }
-                    if (installFeature) {
+                    if (installFeature && (!generateFeatures || generateFeaturesSuccess)) {
+                        debug("1322: Calling runLibertyMojoInstallFeature on DevMojo line 897");
                         runLibertyMojoInstallFeature(null, super.getContainerName());
                     }
                 }
@@ -920,6 +929,7 @@ public class DevMojo extends LooseAppSupport {
                         for (int i = 0; i < features.size(); i++) {
                             featureElems[i + 1] = element(name("feature"), values[i]);
                         }
+                        debug("1322: Calling runLibertyMojoInstallFeature on DevMojo line 932");
                         runLibertyMojoInstallFeature(element(name("features"), featureElems), super.getContainerName());
                         this.existingFeatures.addAll(features);
                     }
@@ -1168,7 +1178,9 @@ public class DevMojo extends LooseAppSupport {
                 // generate features on startup - provide all classes and only user specified
                 // features to binary scanner
                 try {
+                    log.debug("1322: Calling runLibertyMojoGenerateFeatures from DevMojo line 1181");
                     runLibertyMojoGenerateFeatures(null, true);
+                    // since this is startup, no need to clear javaSourceClasses
                 } catch (MojoExecutionException e) {
                     if (e.getCause() != null && e.getCause() instanceof PluginExecutionException) {
                         // PluginExecutionException indicates that the binary scanner jar could not be found
@@ -1186,6 +1198,7 @@ public class DevMojo extends LooseAppSupport {
             // should have "RUN features.sh" in their Dockerfile if they want features to be
             // installed.
             if (!container) {
+                log.debug("1322: Calling runLibertyMojoInstallFeature on DevMojo line 1201");
                 runLibertyMojoInstallFeature(null, null);
             }
             runLibertyMojoDeploy();
