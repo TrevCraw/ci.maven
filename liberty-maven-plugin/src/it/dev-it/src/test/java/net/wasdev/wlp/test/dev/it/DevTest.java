@@ -16,6 +16,7 @@
 package net.wasdev.wlp.test.dev.it;
 
 import static org.junit.Assert.*;
+import static io.openliberty.tools.common.plugins.util.BinaryScannerUtil.*;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -41,185 +42,188 @@ public class DevTest extends BaseDevTest {
       BaseDevTest.cleanUpAfterClass();
    }
 
-   @Test
-   /* simple double check. if failure, check parse in ci.common */
-   public void verifyJsonHost() throws Exception {
-      assertTrue(verifyLogMessageExists("CWWKT0016I", 2000));   // Verify web app code triggered
-      //TODO: fix below with correct assertion
-      verifyLogMessageExists("http:\\/\\/", 2000);  // Verify escape char seq passes
-   }
-
-   @Test
-   public void basicTest() throws Exception {
-      testModifyJavaFile();
-   }
-
-   @Test
-   public void configChangeTest() throws Exception {
-      int generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
-      // configuration file change
-      File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
-      File targetServerXML = new File(targetDir, "/liberty/wlp/usr/servers/defaultServer/server.xml");
-      assertTrue(srcServerXML.exists());
-      assertTrue(targetServerXML.exists());
-
-      replaceString("</feature>", "</feature>\n" + "    <feature>mpHealth-1.0</feature>", srcServerXML);
-
-      // check that features have been generated
-      assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000, ++generateFeaturesCount)); // mojo ran
-
-      // check for server configuration was successfully updated message
-      assertTrue(verifyLogMessageExists("CWWKG0017I", 60000));
-      boolean foundUpdate = verifyLogMessageExists("<feature>mpHealth-1.0</feature>", 60000, targetServerXML);
-      assertTrue("Could not find the updated feature in the target server.xml file", foundUpdate);
-   }
-
-   @Test
-   public void configIncludesChangeTest() throws Exception {
-      // add a feature to an <includes> server configuration file, ensure that
-      // generate-features is called and the server configuration is updated
-      int generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
-      File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
-      File targetServerXMLIncludes = new File(targetDir, "/liberty/wlp/usr/servers/defaultServer/extraFeatures.xml");
-      assertTrue(srcServerXMLIncludes.exists());
-      assertTrue(targetServerXMLIncludes.exists());
-
-      replaceString("<!-- replace -->", "<feature>servlet-4.0</feature>", srcServerXMLIncludes);
-
-      // check that features have been generated
-      assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000, ++generateFeaturesCount)); // mojo ran
-
-      // check for server configuration was successfully updated message
-      assertTrue(verifyLogMessageExists("CWWKG0017I", 60000));
-      boolean foundUpdate = verifyLogMessageExists("<feature>servlet-4.0</feature>", 60000, targetServerXMLIncludes);
-      assertTrue("Could not find the updated feature in the target extraFeatures.xml file", foundUpdate);
-   }
-
-   @Test
-   public void resourceFileChangeTest() throws Exception {
-      // CWWKZ0003I: The application xxx updated in y.yyy seconds.
-      int appUpdatedCount = countOccurrences("CWWKZ0003I:", logFile);
-
-      // make a resource file change
-      File resourceDir = new File(tempProj, "src/main/resources");
-      assertTrue(resourceDir.exists());
-
-      File propertiesFile = new File(resourceDir, "microprofile-config.properties");
-      assertTrue(propertiesFile.createNewFile());
-
-      // dev mode copies file to target dir
-      File targetPropertiesFile = new File(targetDir, "classes/microprofile-config.properties");
-      assertTrue(getLogTail(), verifyFileExists(targetPropertiesFile, 30000)); // wait for dev mode
-      assertTrue(getLogTail(), verifyLogMessageExists("CWWKZ0003I:", 10000, logFile, ++appUpdatedCount));
-
-      // delete a resource file
-      assertTrue(propertiesFile.delete());
-      assertTrue(getLogTail(), verifyFileDoesNotExist(targetPropertiesFile, 10000));
-   }
-
-   @Test
-   public void testDirectoryTest() throws Exception {
-      // create the test directory
-      File testDir = new File(tempProj, "src/test/java");
-      assertTrue(testDir.mkdirs());
-
-      // creates a java test file
-      File unitTestSrcFile = new File(testDir, "UnitTest.java");
-      String unitTest = "import org.junit.Test;\n" + "import static org.junit.Assert.*;\n" + "\n"
-            + "public class UnitTest {\n" + "\n" + "    @Test\n" + "    public void testTrue() {\n"
-            + "        assertTrue(true);\n" + "\n" + "    }\n" + "}";
-      Files.write(unitTestSrcFile.toPath(), unitTest.getBytes());
-      assertTrue(unitTestSrcFile.exists());
-
-      File unitTestTargetFile = new File(targetDir, "/test-classes/UnitTest.class");
-      // wait for compilation
-      assertTrue(getLogTail(), verifyFileExists(unitTestTargetFile, 6000));
-      long lastModified = unitTestTargetFile.lastModified();
-      waitLongEnough();
-
-      // modify the test file
-      String str = "// testing";
-      BufferedWriter javaWriter = new BufferedWriter(new FileWriter(unitTestSrcFile, true));
-      javaWriter.append(' ');
-      javaWriter.append(str);
-
-      javaWriter.close();
-
-      assertTrue(getLogTail(), waitForCompilation(unitTestTargetFile, lastModified, 6000));
-
-      // delete the test file
-      assertTrue(getLogTail(), unitTestSrcFile.delete());
-      assertTrue(getLogTail(), verifyFileDoesNotExist(unitTestTargetFile, 6000));
-   }
-
-   @Test
-   public void manualTestsInvocationTest() throws Exception {
-      writer.write("\n");
-      writer.flush();
-
-      assertTrue(verifyLogMessageExists("Unit tests finished.", 10000));
-      assertTrue(verifyLogMessageExists("Integration tests finished.", 2000));
-   }
    
-    @Test
-    public void invalidDependencyTest() throws Exception {
-        // add invalid dependency to pom.xml
-        String invalidDepComment = "<!-- <dependency>\n" + "        <groupId>io.openliberty.features</groupId>\n"
-                + "        <artifactId>abcd</artifactId>\n" + "        <version>1.0</version>\n"
-                + "    </dependency> -->";
-        String invalidDep = "<dependency>\n" + "        <groupId>io.openliberty.features</groupId>\n"
-                + "        <artifactId>abcd</artifactId>\n" + "        <version>1.0</version>\n" + "    </dependency>";
-        replaceString(invalidDepComment, invalidDep, pom);
-        assertTrue(verifyLogMessageExists("The POM for io.openliberty.features:abcd:jar:1.0 is missing, no dependency information available", 10000));
-    }
+   // @Test
+   // /* simple double check. if failure, check parse in ci.common */
+   // public void verifyJsonHost() throws Exception {
+   //    assertTrue(verifyLogMessageExists("CWWKT0016I", 2000));   // Verify web app code triggered
+   //    //TODO: fix below with correct assertion
+   //    verifyLogMessageExists("http:\\/\\/", 2000);  // Verify escape char seq passes
+   // }
+
+   // @Test
+   // public void basicTest() throws Exception {
+   //    testModifyJavaFile();
+   // }
+
+   // @Test
+   // public void configChangeTest() throws Exception {
+   //    int generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
+   //    // configuration file change
+   //    File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
+   //    File targetServerXML = new File(targetDir, "/liberty/wlp/usr/servers/defaultServer/server.xml");
+   //    assertTrue(srcServerXML.exists());
+   //    assertTrue(targetServerXML.exists());
+
+   //    replaceString("</feature>", "</feature>\n" + "    <feature>mpHealth-1.0</feature>", srcServerXML);
+
+   //    // check that features have been generated
+   //    assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000, ++generateFeaturesCount)); // mojo ran
+
+   //    // check for server configuration was successfully updated message
+   //    assertTrue(verifyLogMessageExists("CWWKG0017I", 60000));
+   //    boolean foundUpdate = verifyLogMessageExists("<feature>mpHealth-1.0</feature>", 60000, targetServerXML);
+   //    assertTrue("Could not find the updated feature in the target server.xml file", foundUpdate);
+   // }
+
+   // @Test
+   // public void configIncludesChangeTest() throws Exception {
+   //    // add a feature to an <includes> server configuration file, ensure that
+   //    // generate-features is called and the server configuration is updated
+   //    int generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
+   //    File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
+   //    File targetServerXMLIncludes = new File(targetDir, "/liberty/wlp/usr/servers/defaultServer/extraFeatures.xml");
+   //    assertTrue(srcServerXMLIncludes.exists());
+   //    assertTrue(targetServerXMLIncludes.exists());
+
+   //    replaceString("<!-- replace -->", "<feature>servlet-4.0</feature>", srcServerXMLIncludes);
+
+   //    // check that features have been generated
+   //    assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000, ++generateFeaturesCount)); // mojo ran
+
+   //    // check for server configuration was successfully updated message
+   //    assertTrue(verifyLogMessageExists("CWWKG0017I", 60000));
+   //    boolean foundUpdate = verifyLogMessageExists("<feature>servlet-4.0</feature>", 60000, targetServerXMLIncludes);
+   //    assertTrue("Could not find the updated feature in the target extraFeatures.xml file", foundUpdate);
+   //    // TODO: revert to original file
+   // }
+
+   // @Test
+   // public void resourceFileChangeTest() throws Exception {
+   //    // CWWKZ0003I: The application xxx updated in y.yyy seconds.
+   //    int appUpdatedCount = countOccurrences("CWWKZ0003I:", logFile);
+
+   //    // make a resource file change
+   //    File resourceDir = new File(tempProj, "src/main/resources");
+   //    assertTrue(resourceDir.exists());
+
+   //    File propertiesFile = new File(resourceDir, "microprofile-config.properties");
+   //    assertTrue(propertiesFile.createNewFile());
+
+   //    // dev mode copies file to target dir
+   //    File targetPropertiesFile = new File(targetDir, "classes/microprofile-config.properties");
+   //    assertTrue(getLogTail(), verifyFileExists(targetPropertiesFile, 30000)); // wait for dev mode
+   //    assertTrue(getLogTail(), verifyLogMessageExists("CWWKZ0003I:", 10000, logFile, ++appUpdatedCount));
+
+   //    // delete a resource file
+   //    assertTrue(propertiesFile.delete());
+   //    assertTrue(getLogTail(), verifyFileDoesNotExist(targetPropertiesFile, 10000));
+   // }
+
+   // @Test
+   // public void testDirectoryTest() throws Exception {
+   //    // create the test directory
+   //    File testDir = new File(tempProj, "src/test/java");
+   //    assertTrue(testDir.mkdirs());
+
+   //    // creates a java test file
+   //    File unitTestSrcFile = new File(testDir, "UnitTest.java");
+   //    String unitTest = "import org.junit.Test;\n" + "import static org.junit.Assert.*;\n" + "\n"
+   //          + "public class UnitTest {\n" + "\n" + "    @Test\n" + "    public void testTrue() {\n"
+   //          + "        assertTrue(true);\n" + "\n" + "    }\n" + "}";
+   //    Files.write(unitTestSrcFile.toPath(), unitTest.getBytes());
+   //    assertTrue(unitTestSrcFile.exists());
+
+   //    File unitTestTargetFile = new File(targetDir, "/test-classes/UnitTest.class");
+   //    // wait for compilation
+   //    assertTrue(getLogTail(), verifyFileExists(unitTestTargetFile, 6000));
+   //    long lastModified = unitTestTargetFile.lastModified();
+   //    waitLongEnough();
+
+   //    // modify the test file
+   //    String str = "// testing";
+   //    BufferedWriter javaWriter = new BufferedWriter(new FileWriter(unitTestSrcFile, true));
+   //    javaWriter.append(' ');
+   //    javaWriter.append(str);
+
+   //    javaWriter.close();
+
+   //    assertTrue(getLogTail(), waitForCompilation(unitTestTargetFile, lastModified, 6000));
+
+   //    // delete the test file
+   //    assertTrue(getLogTail(), unitTestSrcFile.delete());
+   //    assertTrue(getLogTail(), verifyFileDoesNotExist(unitTestTargetFile, 6000));
+   // }
+
+   // @Test
+   // public void manualTestsInvocationTest() throws Exception {
+   //    writer.write("\n");
+   //    writer.flush();
+
+   //    assertTrue(verifyLogMessageExists("Unit tests finished.", 10000));
+   //    assertTrue(verifyLogMessageExists("Integration tests finished.", 2000));
+   // }
    
-   @Test
-   public void resolveDependencyTest() throws Exception {      
-      assertTrue(verifyLogMessageExists("Liberty is running in dev mode.", 10000));
+   //  @Test
+   //  public void invalidDependencyTest() throws Exception {
+   //      // add invalid dependency to pom.xml
+   //      String invalidDepComment = "<!-- <dependency>\n" + "        <groupId>io.openliberty.features</groupId>\n"
+   //              + "        <artifactId>abcd</artifactId>\n" + "        <version>1.0</version>\n"
+   //              + "    </dependency> -->";
+   //      String invalidDep = "<dependency>\n" + "        <groupId>io.openliberty.features</groupId>\n"
+   //              + "        <artifactId>abcd</artifactId>\n" + "        <version>1.0</version>\n" + "    </dependency>";
+   //      replaceString(invalidDepComment, invalidDep, pom);
+   //      assertTrue(verifyLogMessageExists("The POM for io.openliberty.features:abcd:jar:1.0 is missing, no dependency information available", 10000));
+   //  }
+   
+   // @Test
+   // public void resolveDependencyTest() throws Exception {      
+   //    assertTrue(verifyLogMessageExists("Liberty is running in dev mode.", 10000));
 
-      // create the HealthCheck class, expect a compilation error
-      File systemHealthRes = new File("../resources/SystemHealth.java");
-      assertTrue(systemHealthRes.exists());
-      File systemHealthSrc = new File(tempProj, "/src/main/java/com/demo/SystemHealth.java");
-      File systemHealthTarget = new File(targetDir, "/classes/com/demo/SystemHealth.class");
+   //    // create the HealthCheck class, expect a compilation error
+   //    File systemHealthRes = new File("../resources/SystemHealth.java");
+   //    assertTrue(systemHealthRes.exists());
+   //    File systemHealthSrc = new File(tempProj, "/src/main/java/com/demo/SystemHealth.java");
+   //    File systemHealthTarget = new File(targetDir, "/classes/com/demo/SystemHealth.class");
 
-      FileUtils.copyFile(systemHealthRes, systemHealthSrc);
-      assertTrue(systemHealthSrc.exists());
+   //    FileUtils.copyFile(systemHealthRes, systemHealthSrc);
+   //    assertTrue(systemHealthSrc.exists());
       
-      assertTrue(verifyLogMessageExists("Source compilation had errors", 200000));
-      assertFalse(systemHealthTarget.exists());
+   //    assertTrue(verifyLogMessageExists("Source compilation had errors", 200000));
+   //    assertFalse(systemHealthTarget.exists());
       
-      // add mpHealth dependency to pom.xml
-      String mpHealthComment = "<!-- <dependency>\n" + 
-            "        <groupId>io.openliberty.features</groupId>\n" + 
-            "        <artifactId>mpHealth-1.0</artifactId>\n" + 
-            "        <type>esa</type>\n" + 
-            "        <scope>provided</scope>\n" + 
-            "    </dependency> -->";
-      String mpHealth = "<dependency>\n" + 
-            "        <groupId>io.openliberty.features</groupId>\n" + 
-            "        <artifactId>mpHealth-1.0</artifactId>\n" + 
-            "        <type>esa</type>\n" + 
-            "        <scope>provided</scope>\n" + 
-            "    </dependency>";
-      replaceString(mpHealthComment, mpHealth, pom);
+   //    // add mpHealth dependency to pom.xml
+   //    String mpHealthComment = "<!-- <dependency>\n" + 
+   //          "        <groupId>io.openliberty.features</groupId>\n" + 
+   //          "        <artifactId>mpHealth-1.0</artifactId>\n" + 
+   //          "        <type>esa</type>\n" + 
+   //          "        <scope>provided</scope>\n" + 
+   //          "    </dependency> -->";
+   //    String mpHealth = "<dependency>\n" + 
+   //          "        <groupId>io.openliberty.features</groupId>\n" + 
+   //          "        <artifactId>mpHealth-1.0</artifactId>\n" + 
+   //          "        <type>esa</type>\n" + 
+   //          "        <scope>provided</scope>\n" + 
+   //          "    </dependency>";
+   //    replaceString(mpHealthComment, mpHealth, pom);
       
-      assertTrue(verifyLogMessageExists("The following features have been installed", 100000));
+   //    assertTrue(verifyLogMessageExists("The following features have been installed", 100000));
       
-      String str = "// testing";
-      BufferedWriter javaWriter = new BufferedWriter(new FileWriter(systemHealthSrc, true));
-      javaWriter.append(' ');
-      javaWriter.append(str);
+   //    String str = "// testing";
+   //    BufferedWriter javaWriter = new BufferedWriter(new FileWriter(systemHealthSrc, true));
+   //    javaWriter.append(' ');
+   //    javaWriter.append(str);
 
-      javaWriter.close();
+   //    javaWriter.close();
 
-      // wait for compilation
-      assertTrue(getLogTail(), verifyLogMessageExists("Source compilation was successful.", 100000));
-      assertTrue(getLogTail(), verifyFileExists(systemHealthTarget, 15000));
-   }
+   //    // wait for compilation
+   //    assertTrue(getLogTail(), verifyLogMessageExists("Source compilation was successful.", 100000));
+   //    assertTrue(getLogTail(), verifyFileExists(systemHealthTarget, 15000));
+   // }
 
    @Test
    public void generateFeatureTest() throws Exception {
+      System.out.println("<<<<< CAN YOU SEE THIS??? >>>>>");
       final String SERVER_XML_COMMENT = "Plugin has generated Liberty features"; // the explanation added to server.xml
       final String NEW_FILE_INFO_MESSAGE = "This file was generated by the Liberty Maven Plugin and will be overwritten"; // the explanation added to the generated features file
       // After generate features is toggled off and on we end up with 'No functional changes were detected'
@@ -285,6 +289,29 @@ public class DevTest extends BaseDevTest {
       assertTrue(autoGenOn, verifyLogMessageExists(autoGenOn, 10000));
       // Check for server response to regenerated feature list.
       assertTrue(SERVER_NOT_UPDATED, verifyLogMessageExists(SERVER_NOT_UPDATED, 10000));
+
+      /*
+      // Create conflict with added feature to server configuration
+      // should servlet-4.0 be removed in the previous test? Or replaced here? Or the file is reset in a new test?
+      File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
+      replaceString("<!-- replace -->", "<feature>webProfile-7.0</feature>", srcServerXMLIncludes);
+      Set<String> conflictingFeatureSet = new HashSet<String>(Arrays.asList("batch-1.0, webProfile-7.0, jaxrs-2.1"));
+      Set<String> recommendedFeatureSet = new HashSet<String>(Arrays.asList("batch-1.0, webProfile-8.0, jaxrs-2.1"));
+      // do I do verifyLogMessageExists or use the processOutput?
+      // need to import BinaryScannerUtil for the conflict message?
+      // consider occurrences here? - use count method here to be safe
+      assertTrue(verifyLogMessageExists(String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet), 10000));
+      //assertTrue("Could not find the feature conflict message in the process output.\n " + processOutput,
+                //processOutput.contains(
+                        //String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet)));
+      // need to remove webProfile-7.0 from server.xml?
+      replaceString("<feature>webProfile-7.0</feature>", "<!-- replace -->", srcServerXMLIncludes);
+      // consider occurrences here? -> is there a check for occurrences did NOT go up?
+      assertFalse(verifyLogMessageExists(String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet), 10000));
+      // add check that generate features count did go up
+      // code here-------
+      */
+      
 
       // Remove a class and use 'optimize' to rebuild the generated features
       assertTrue(helloBatchSrc.delete());
