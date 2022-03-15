@@ -299,7 +299,8 @@ public class DevTest extends BaseDevTest {
       Set<String> conflictingFeatureSet = new HashSet<String>(Arrays.asList("servlet-4.0, batch-1.0, webProfile-7.0"));
       Set<String> recommendedFeatureSet = new HashSet<String>(Arrays.asList("servlet-4.0, batch-1.0, webProfile-8.0"));
       final String conflictErrorMsg = String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet);
-      assertTrue(getLogTail(), verifyLogMessageExists(conflictErrorMsg, 20000));
+      boolean msgExists = verifyLogMessageExists(conflictErrorMsg, 100000);
+      assertTrue(getLogTail(), msgExists);
       //assertTrue("Could not find the feature conflict message in the process output.\n " + processOutput,
                 //processOutput.contains(
                         //String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet)));
