@@ -232,6 +232,7 @@ public class DevTest extends BaseDevTest {
       // After generate features is toggled off and on we end up with 'No functional changes were detected'
       final String SERVER_NOT_UPDATED = "CWWKG0018I:";
       final String SERVER_UPDATE_COMPLETE = "CWWKF0008I:"; // Feature update completed in 0.649 seconds.
+      final String GENERATE_FEATURES_SUCCESS = "Generated the following features: "; //[servlet-4.0, batch-1.0]
 
       // Verify generate features runs when dev mode first starts
       assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000));
@@ -293,6 +294,12 @@ public class DevTest extends BaseDevTest {
       // Check for server response to regenerated feature list.
       assertTrue(SERVER_NOT_UPDATED, verifyLogMessageExists(SERVER_NOT_UPDATED, 10000));
 
+      // Remove feature from server.xml and ensure it is regenerated
+      File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
+      replaceString("<feature>jaxrs-2.1</feature>", "<!-- replace -->", srcServerXML);
+      // jaxrs-2.1 is required by the application, so it should be generated
+
+
       // Create conflict with added feature to server configuration
       File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
       replaceString("<!-- replace -->", "<feature>webProfile-7.0</feature>", srcServerXMLIncludes);
@@ -309,9 +316,9 @@ public class DevTest extends BaseDevTest {
       generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
       replaceString("<feature>webProfile-7.0</feature>", "<!-- replace -->", srcServerXMLIncludes);
       // verify conflict error did not occur again
-      assertTrue(verifyLogMessageExists(conflictErrorMsg, 10000, conflictErrCount));
+      assertTrue(verifyLogMessageExists(conflictErrorMsg, 100000, conflictErrCount));
       // check that generate features count went up
-      assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000, generateFeaturesCount+1));
+      assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 100000, generateFeaturesCount+1));
 
       // Remove a class and use 'optimize' to rebuild the generated features
       assertTrue(helloBatchSrc.delete());
