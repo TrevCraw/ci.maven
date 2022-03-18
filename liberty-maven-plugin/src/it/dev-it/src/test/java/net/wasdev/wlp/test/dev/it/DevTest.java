@@ -232,7 +232,7 @@ public class DevTest extends BaseDevTest {
       // After generate features is toggled off and on we end up with 'No functional changes were detected'
       final String SERVER_NOT_UPDATED = "CWWKG0018I:";
       final String SERVER_UPDATE_COMPLETE = "CWWKF0008I:"; // Feature update completed in 0.649 seconds.
-      final String GENERATE_FEATURES_SUCCESS = "Generated the following features: "; //[servlet-4.0, batch-1.0]
+      final String GENERATE_FEATURES_SUCCESS = "Generated the following features:"; //[servlet-4.0, batch-1.0]
 
       // Verify generate features runs when dev mode first starts
       assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000));
@@ -298,7 +298,10 @@ public class DevTest extends BaseDevTest {
       File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
       replaceString("<feature>jaxrs-2.1</feature>", "<!-- replace -->", srcServerXML);
       // jaxrs-2.1 is required by the application, so it should be generated
-
+      boolean generatedFeaturesSuccess = verifyLogMessageExists(GENERATE_FEATURES_SUCCESS, 10000);
+      assertTrue(getLogTail(), generatedFeaturesSuccess);
+      boolean featureInFile = verifyLogMessageExists("jaxrs-2.1", 10000, newFeatureFile);
+      assertTrue(getLogTail(), featureInFile);
 
       // Create conflict with added feature to server configuration
       File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
