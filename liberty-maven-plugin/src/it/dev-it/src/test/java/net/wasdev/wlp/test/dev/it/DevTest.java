@@ -232,7 +232,6 @@ public class DevTest extends BaseDevTest {
       // After generate features is toggled off and on we end up with 'No functional changes were detected'
       final String SERVER_NOT_UPDATED = "CWWKG0018I:";
       final String SERVER_UPDATE_COMPLETE = "CWWKF0008I:"; // Feature update completed in 0.649 seconds.
-      final String GENERATE_FEATURES_SUCCESS = "Generated the following features:"; //[servlet-4.0, batch-1.0]
 
       // Verify generate features runs when dev mode first starts
       assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 10000));
@@ -294,35 +293,6 @@ public class DevTest extends BaseDevTest {
       // Check for server response to regenerated feature list.
       assertTrue(SERVER_NOT_UPDATED, verifyLogMessageExists(SERVER_NOT_UPDATED, 10000));
 
-      // Remove feature from server.xml and ensure it is regenerated
-      File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
-      replaceString("<feature>jaxrs-2.1</feature>", "<!-- replace -->", srcServerXML);
-      // jaxrs-2.1 is required by the application, so it should be generated
-      boolean generatedFeaturesSuccess = verifyLogMessageExists(GENERATE_FEATURES_SUCCESS, 10000);
-      assertTrue(getLogTail(), generatedFeaturesSuccess);
-      boolean featureInFile = verifyLogMessageExists("jaxrs-2.1", 10000, newFeatureFile);
-      assertTrue(getLogTail(), featureInFile);
-
-      // Create conflict with added feature to server configuration
-      File srcServerXMLIncludes = new File(tempProj, "/src/main/liberty/config/extraFeatures.xml");
-      replaceString("<!-- replace -->", "<feature>webProfile-7.0</feature>", srcServerXMLIncludes);
-      Set<String> conflictingFeatureSet = new HashSet<String>(Arrays.asList("servlet-4.0, batch-1.0, webProfile-7.0"));
-      Set<String> recommendedFeatureSet = new HashSet<String>(Arrays.asList("servlet-4.0, batch-1.0, webProfile-8.0"));
-      final String conflictErrorMsg = String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet);
-      boolean msgExists = verifyLogMessageExists(conflictErrorMsg, 100000);
-      assertTrue(getLogTail(), msgExists);
-      //assertTrue("Could not find the feature conflict message in the process output.\n " + processOutput,
-                //processOutput.contains(
-                        //String.format(BINARY_SCANNER_CONFLICT_MESSAGE1, conflictingFeatureSet, recommendedFeatureSet)));
-      // need to remove webProfile-7.0 from server.xml?
-      int conflictErrCount = countOccurrences(conflictErrorMsg, logFile);
-      generateFeaturesCount = countOccurrences(RUNNING_GENERATE_FEATURES, logFile);
-      replaceString("<feature>webProfile-7.0</feature>", "<!-- replace -->", srcServerXMLIncludes);
-      // verify conflict error did not occur again
-      assertTrue(verifyLogMessageExists(conflictErrorMsg, 100000, conflictErrCount));
-      // check that generate features count went up
-      assertTrue(verifyLogMessageExists(RUNNING_GENERATE_FEATURES, 100000, generateFeaturesCount+1));
-
       // Remove a class and use 'optimize' to rebuild the generated features
       assertTrue(helloBatchSrc.delete());
       assertTrue(verifyFileDoesNotExist(helloBatchSrc, 15000));
@@ -334,8 +304,41 @@ public class DevTest extends BaseDevTest {
       writer.flush();
       assertTrue(verifyLogMessageExists("batch-1.0", 10000, newFeatureFile, 0)); // exist 0 times
       // Check for server response to newly generated feature list.
+      // TODO: should this be a count?
       assertTrue(SERVER_UPDATE_COMPLETE, verifyLogMessageExists(SERVER_UPDATE_COMPLETE, 10000));
       // Need to ensure server finished updating before the next test starts.
+   }
+
+   @Test
+   public void removeFeatureTest() throws Exception {
+      final String GENERATE_FEATURES_SUCCESS = "Generated the following features:";
+      final String SERVER_UPDATE_COMPLETE = "CWWKF0008I:"; // Feature update completed in 0.649 seconds.
+
+      // Remove feature from server.xml and ensure it is regenerated
+      File srcServerXML = new File(tempProj, "/src/main/liberty/config/server.xml");
+      replaceString("<feature>jaxrs-2.1</feature>", "<!-- replace -->", srcServerXML);
+      // jaxrs-2.1 is required by the application, so it should be generated
+      // TODO: this should be a count
+      boolean generatedFeaturesSuccess = verifyLogMessageExists(GENERATE_FEATURES_SUCCESS, 10000);
+      assertTrue(getLogTail(), generatedFeaturesSuccess);
+      File generatedFeaturesFile = getGeneratedFeaturesFile();
+      assertTrue(verifyFileExists(generatedFeaturesFile, 5000));
+      boolean featureInFile = verifyLogMessageExists("jaxrs-2.1", 10000, generatedFeaturesFile);
+      assertTrue(getLogTail(), featureInFile);
+
+      // put jaxrs-2.1 feature back in server.xml for test consistency
+      replaceString("<!-- replace -->", "<feature>jaxrs-2.1</feature>", srcServerXML);
+      // generate features should run
+      // TODO: this should be a count
+      generatedFeaturesSuccess = verifyLogMessageExists(GENERATE_FEATURES_SUCCESS, 10000);
+      assertTrue(getLogTail(), generatedFeaturesSuccess);
+      assertTrue(verifyFileExists(generatedFeaturesFile, 5000));
+      featureInFile = verifyLogMessageExists("jaxrs-2.1", 10000, generatedFeaturesFile);
+      assertFalse(getLogTail(), featureInFile);
+
+      // Ensure dev mode is done processing
+      // TODO: should this be a count?
+      assertTrue(SERVER_UPDATE_COMPLETE, verifyLogMessageExists(SERVER_UPDATE_COMPLETE, 10000));
    }
 
 }
