@@ -253,7 +253,7 @@ public class GenerateFeaturesMojo extends ServerFeatureSupport {
         }
         log.debug("Features detected by binary scanner which are not in server.xml" + missingLibertyFeatures);
 
-        File newServerXmlSrc = new File(configDirectory, GENERATED_FEATURES_FILE_PATH);
+        File newServerXmlSrc = new File("target/liberty/wlp/usr/servers/defaultServer/", GENERATED_FEATURES_FILE_PATH);
         File serverXml = findConfigFile("server.xml", serverXmlFile);
         ServerConfigXmlDocument doc = getServerXmlDocFromConfig(serverXml);
         log.debug("Xml document we'll try to update after generate features doc=" + doc + " file=" + serverXml);
